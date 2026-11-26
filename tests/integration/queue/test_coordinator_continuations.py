@@ -176,8 +176,14 @@ def test_cancel_while_request_build_finishes_cannot_reserve(tmp_path, monkeypatc
 
 
 def test_admission_detail_times_actual_context_request_and_reservation_waits(tmp_path, monkeypatch):
-    from loom.queue import _ready_preparation
+    from loom.queue import _context_timing, _ready_preparation
 
+    monkeypatch.setenv("LOOM_QUALIFICATION_TIMINGS", "all")
+    events = []
+    def capture(action, *, details, **attrs):
+        events.append((action, {**attrs, **details}))
+
+    monkeypatch.setattr(_context_timing, "milestone", capture)
     config = _daemon_config(tmp_path)
     run_uri = _persist_sleep_run(config.run_store_root, run_name="waits", stage_name="work", seconds=0.01)
     LocalDaemon.initialize(config)
@@ -219,6 +225,19 @@ def test_admission_detail_times_actual_context_request_and_reservation_waits(tmp
         for _, release in gates.values():
             release.set()
         daemon.stop()
+    activation = next(attrs for name, attrs in events if name == "context_consumer_advanced"
+                      and attrs["consumer"] == "admission_activation")
+    observed = [(name, attrs) for name, attrs in events if attrs["context_request_id"] == activation["context_request_id"]]
+    assert all(attrs["admission_id"] == admission.admission_id and attrs["admission_revision"] == admission.revision
+               for _, attrs in observed)
+    assert [name for name, _ in observed if name != "context_cache_evicted"] == [
+        "context_requested", "context_loader_started", "context_validation",
+        "context_available", "context_consumer_advanced", "context_discarded",
+    ]
+    assert any(name == "context_validation" and attrs["result"] == "cache_hit" for name, attrs in events)
+    assert any(name == "context_discarded" and attrs["owner"] == "retained" and attrs["reason"]
+               for name, attrs in observed)
+
 
 
 def test_requested_authority_read_completes_five_seconds_before_single_reservation(tmp_path, monkeypatch):

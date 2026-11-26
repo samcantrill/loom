@@ -1,12 +1,16 @@
 """Disposable, bounded retained-input preparation owned by reconciliation."""
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Callable, Iterable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from time import monotonic
+
+from ._context_timing import ContextTiming, current_load
+from ._phase_timing import qualification_timings
 
 if TYPE_CHECKING:
     from ._coordinator_run_authority import _ScopedCoordinatorAuthority
@@ -26,9 +30,21 @@ class PendingContext:
     for_dispatch: bool
     fresh_load: bool = True
     invalidated: bool = False
+    timing: ContextTiming | None = None
 
     def result(self) -> PreparedAdmissionContext:
-        return self.future.result()
+        try:
+            return self.future.result()
+        except CancelledError:
+            self.discard("load_superseded")
+            raise
+        except Exception:
+            self.discard("load_failed")
+            raise
+
+    def discard(self, reason: str) -> None:
+        if self.timing is not None:
+            self.timing.discard("preparation", reason)
 
 
 class ContextPreparations:
@@ -45,6 +61,10 @@ class ContextPreparations:
         self._wake = wake
         self._next_load: dict[str, tuple[int, tuple[str | None, str | None], float, str]] = {}
         self._interval = 0.0
+        self._tracing = qualification_timings()
+        # Diagnostic history of offers refused before a slot exists. This is
+        # bounded independently of the executor and never schedules a retry.
+        self._waiting: OrderedDict[str, ContextTiming] = OrderedDict()
 
     def begin_cycle(
         self, *, minimum_interval: float = 0.0, invalidated: Iterable[str] = (),
@@ -55,6 +75,10 @@ class ContextPreparations:
         for item in self._pending.values():
             if item.admission.run_uri in invalidated_runs:
                 item.invalidated = True
+                item.discard("run_invalidated")
+        for identity, ticket in tuple(self._waiting.items()):
+            if ticket.admission.run_uri in invalidated_runs:
+                self._waiting.pop(identity).discard("request", "run_invalidated")
         # These entries only suppress repeat filesystem loads until their
         # deadline. Expire them independently of which admission page is read.
         for identity, (_, _, deadline, run_uri) in tuple(self._next_load.items()):
@@ -64,6 +88,33 @@ class ContextPreparations:
     def has_capacity(self) -> bool:
         return sum(item.fresh_load for item in self._pending.values()) < 2
 
+    def _request_timing(
+        self, admission: LocalDaemonAdmission, epochs: tuple[str | None, str | None], *,
+        source: str, wait_reason: str, reuse: bool,
+    ) -> ContextTiming | None:
+        identity = admission.admission_id
+        timing = self._waiting.get(identity)
+        if timing is not None:
+            reason = None
+            if timing.epochs != epochs:
+                reason = "epoch_changed"
+            elif timing.admission.revision != admission.revision:
+                reason = "admission_revision_changed"
+            elif reuse:
+                reason = "retained_reuse"
+            if reason is not None:
+                self._waiting.pop(identity).discard("request", reason)
+                timing = None
+        if reuse:
+            return None
+        if timing is None:
+            timing = ContextTiming(admission, epochs, source)
+            timing.event("context_requested", wait_reason=wait_reason)
+            self._waiting[identity] = timing
+            if len(self._waiting) > 256:
+                self._waiting.popitem(last=False)[1].discard("request", "observation_limit")
+        return timing
+
     def try_submit(
         self, admission: LocalDaemonAdmission, epochs: tuple[str | None, str | None],
         load: ContextLoader,
@@ -72,25 +123,41 @@ class ContextPreparations:
     ) -> bool:
         """Account for one admission, deferring it only when both slots are occupied."""
         identity = admission.admission_id
-        if identity in self._pending:
+        pending = self._pending.get(identity)
+        if pending is not None and (not self._tracing or (
+            pending.admission.revision == admission.revision and pending.epochs == epochs and not pending.invalidated
+        )):
             return True
         previous = self._next_load.get(identity)
-        if (not (for_dispatch or resume) and previous is not None
+        if (pending is None and not (for_dispatch or resume) and previous is not None
             and previous[:2] == (admission.revision, epochs) and monotonic() < previous[2]):
             return True
-        if continuation is None and not self.has_capacity():
+        if pending is not None:
+            wait_reason = "superseded_load_running"
+        elif continuation is None and not self.has_capacity():
+            wait_reason = "workers_busy"
+        elif for_dispatch and any(item.for_dispatch for item in self._pending.values()):
+            wait_reason = "dispatch_slot_busy"
+        else:
+            wait_reason = "available"
+        timing = None
+        if self._tracing:
+            source = "dispatch" if for_dispatch else ("resume" if resume else "discovery")
+            timing = self._request_timing(admission, epochs, source=source,
+                                          wait_reason=wait_reason, reuse=continuation is not None)
+        if pending is not None:
+            return True
+        if wait_reason != "available":
             return False
-        # READY work gets first access to a freed slot. Keep the other slot
-        # available for admissions that still need their initial reconciliation.
-        if for_dispatch and any(item.for_dispatch for item in self._pending.values()):
-            return False
+        if timing is not None:
+            del self._waiting[identity]
         if continuation is None:
-            future = self._workers.submit(copy_context().run, _load_context, load, admission, epochs)
+            future = self._workers.submit(copy_context().run, _load_context, load, admission, epochs, timing)
         else:
             future = Future()
             future.set_result(continuation)
         self._pending[identity] = PendingContext(
-            admission, epochs, future, for_dispatch, fresh_load=continuation is None,
+            admission, epochs, future, for_dispatch, fresh_load=continuation is None, timing=timing,
         )
         future.add_done_callback(lambda _future: self._wake())
         return True
@@ -116,15 +183,29 @@ class ContextPreparations:
     def close(self) -> None:
         # Running IO cannot safely be killed. It holds only captured inputs and
         # may finish after shutdown; no completion can authorize execution.
+        for item in self._pending.values():
+            item.discard("shutdown")
+        for timing in self._waiting.values():
+            timing.discard("request", "shutdown")
+        self._waiting.clear()
         self._workers.shutdown(wait=False, cancel_futures=True)
         self._next_load.clear()
 
 
 def _load_context(
     load: ContextLoader,
-    admission: LocalDaemonAdmission, epochs: tuple[str | None, str | None],
+    admission: LocalDaemonAdmission, epochs: tuple[str | None, str | None], timing: ContextTiming | None,
 ) -> PreparedAdmissionContext:
     from ._phase_timing import reported_phases
 
-    with reported_phases("context_preparation", operation_id=admission.authority_operation_id):
-        return load(admission, epochs)
+    token = current_load.set(timing)
+    try:
+        if timing is not None:
+            timing.event("context_loader_started")
+        with reported_phases("context_preparation", operation_id=admission.authority_operation_id):
+            context = load(admission, epochs)
+        if timing is not None:
+            timing.event("context_available")
+        return context
+    finally:
+        current_load.reset(token)

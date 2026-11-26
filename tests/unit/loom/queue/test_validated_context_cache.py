@@ -323,3 +323,107 @@ def test_owned_bulk_continuation_advances_with_both_context_readers_occupied():
     finally:
         release.set()
         contexts.close()
+
+def test_context_loader_refusals_keep_the_first_request_across_retries(monkeypatch):
+    from threading import Event
+    from types import SimpleNamespace
+
+    from loom.queue import _context_timing
+    from loom.queue._context_preparation import ContextPreparations
+    from loom.queue.local_daemon import LocalDaemonAdmission, LocalDaemonAdmissionState
+
+    monkeypatch.setenv("LOOM_QUALIFICATION_TIMINGS", "all")
+    events = []
+    def capture(action, *, details, **attrs):
+        events.append((action, {**attrs, **details}))
+
+    monkeypatch.setattr(_context_timing, "milestone", capture)
+    pool = ContextPreparations(lambda: None)
+    release = Event()
+    epochs = ("owner", "policy")
+    base = LocalDaemonAdmission(
+        "first", "item", "owner", "run", "digest", "managed-stage", LocalDaemonAdmissionState.WAITING,
+        "2026-01-01T00:00:00Z", "bind",
+    )
+
+    def load(_admission, _epochs):
+        assert release.wait(5)
+        return object(), SimpleNamespace(_context_timing=_context_timing.current_load.get())
+
+    def select(admission):
+        return [(name, attrs) for name, attrs in events if attrs["admission_id"] == admission.admission_id]
+
+    second = replace(base, admission_id="second")
+    third = replace(base, admission_id="third")
+    try:
+        assert pool.try_submit(base, epochs, load, for_dispatch=True)
+        assert not pool.try_submit(third, epochs, load, for_dispatch=True)
+        assert pool.try_submit(second, epochs, load)
+        assert not pool.try_submit(third, epochs, load, for_dispatch=True)
+        assert [(name, attrs["wait_reason"]) for name, attrs in select(third)] == [
+            ("context_requested", "dispatch_slot_busy")]
+        pool.begin_cycle(invalidated=[base.run_uri])
+        assert [a["reason"] for name, a in select(third) if name == "context_discarded"] == ["run_invalidated"]
+        third = replace(third, revision=2)
+        assert not pool.try_submit(third, epochs, load, for_dispatch=True)
+        release.set()
+        for pending in tuple(pool._pending.values()):
+            pending.future.result(timeout=5)
+        assert not pool.completed()
+        assert pool.try_submit(third, epochs, load, for_dispatch=True)
+        pool._pending[third.admission_id].future.result(timeout=5)
+        item, = pool.completed()
+        checked = item.result()
+        timing = _context_timing.timing_for(checked)
+        assert timing is not None
+        assert pool.try_submit(third, epochs, load, resume=True, continuation=checked)
+        assert pool.completed()[0].result() is checked
+        timing.advance("stage_preparation")
+        timing.advance("run_reconciliation")
+        timing.discard("retained", "no_continuation")
+        actual = [(name, attrs) for name, attrs in select(third) if attrs["admission_revision"] == 2]
+        assert [name for name, _ in actual] == ["context_requested", "context_loader_started",
+            "context_available", "context_consumer_advanced", "context_discarded"]
+        assert len({attrs["context_request_id"] for _, attrs in actual}) == 1
+        assert actual[0][1]["wait_reason"] == "workers_busy"
+    finally:
+        release.set()
+        pool.close()
+
+def test_context_validation_reports_why_an_intent_is_reloaded(tmp_path):
+    from loom.queue._context_timing import ContextTiming, current_load
+    from loom.queue.local_daemon import LocalDaemonAdmission, LocalDaemonAdmissionState
+
+    cache = ValidatedContextCache[ManagedLocalIntent](max_entries=1)
+    first, second = [_prepare(tmp_path / str(i), evidence=False) for i in range(2)]
+    results = []
+
+    class Capture(ContextTiming):
+        def event(self, action, **details):
+            results.append((self.admission.admission_id, action, details))
+
+    def load(row, store_info):
+        _, uri, config = store_info
+        admission = LocalDaemonAdmission(row, row, "owner", uri, "digest", "managed-stage",
+                                         LocalDaemonAdmissionState.WAITING, "2026-01-01T00:00:00Z", row)
+        token = current_load.set(Capture(admission, ("owner", "policy"), "discovery"))
+        try:
+            return load_managed_local_intent(config, uri, cache=cache)
+        finally:
+            current_load.reset(token)
+
+    original = load("first", first)
+    assert load("hit", first) is original
+    # Harmless new bytes still require fresh validation.
+    path = first[0].local_run_dir(first[1]) / "plan.json"
+    path.write_bytes(path.read_bytes() + b"\n")
+    assert load("refresh", first) is not original
+    load("second", second)
+    assert results == [
+        ("first", "context_validation", {"result": "cold_load"}),
+        ("hit", "context_validation", {"result": "cache_hit"}),
+        ("refresh", "context_validation", {"result": "dependencies_changed"}),
+        ("first", "context_cache_evicted", {"reason": "replaced"}),
+        ("second", "context_validation", {"result": "cold_load"}),
+        ("refresh", "context_cache_evicted", {"reason": "capacity"}),
+    ]

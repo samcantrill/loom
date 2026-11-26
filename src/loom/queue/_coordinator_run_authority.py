@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, cast
 
+from ._context_timing import current_load
 from .errors import QueueConflictError, QueueServiceError
 
 if TYPE_CHECKING:
@@ -37,6 +38,7 @@ class _ScopedCoordinatorAuthority:
         ordinary_mutation_frozen: Callable[[str], bool] | None = None,
         on_grant: Callable[[str, ExecutionFence], None] | None = None,
     ) -> None:
+        self._context_timing = current_load.get()
         self._store = store
         self._run_uri = run_uri
         self._coordinator_id = coordinator_id
