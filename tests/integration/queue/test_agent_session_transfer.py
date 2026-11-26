@@ -350,6 +350,7 @@ def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
         requirement=ExecutionRequirement("project-1", "environment-1", "executor-1"),
     )
     config = replace(_config(tmp_path, policy), remote_profiles=(descriptor,))
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
     LocalDaemon.initialize(config)
     daemon = LocalDaemon(config)
     daemon.start()
@@ -415,9 +416,8 @@ def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
             ),
             idempotency_key="offer",
         )
-        daemon.client_view(
-            LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT)
-        ).submit(LocalDaemonAdmissionRequest("item", run_uri))
+        client = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+        admission = client.submit(LocalDaemonAdmissionRequest("item", run_uri))
         deadline = monotonic() + 5
         while not rejected:
             daemon.reconcile_once()
@@ -458,7 +458,15 @@ def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
                 assert authority.read_prepared_binding(
                     run_uri, assignment_id=first_id, attempt_id=identity["attempt_id"],
                 ).state is PreparedBindingState.ABSENT
-        monkeypatch.setattr(local_daemon_execution, "_target_remote_delivery", original_target)
+        committed = []
+
+        def deliver_then_lose_reply(*args, **kwargs):
+            original_target(*args, **kwargs)
+            committed.append(kwargs["request"])
+            raise QueueServiceError("lost committed target reply")
+
+        if interruption == "withdrawn_offer":
+            monkeypatch.setattr(local_daemon_execution, "_target_remote_delivery", deliver_then_lose_reply)
         deadline = monotonic() + 10
         while True:
             daemon.reconcile_once()
@@ -468,6 +476,18 @@ def test_rejected_remote_target_unbinds_attempt_and_releases_reservation(
                 break
             assert monotonic() < deadline, "reopened attempt did not receive a delivery"
             sleep(0.01)
+        if interruption == "withdrawn_offer":
+            [delivered] = committed
+            assert client.admission(admission.admission_id).admission.state is LocalDaemonAdmissionState.ACTIVE
+            assert row[0] == delivered.assignment_id
+            assert daemon._execution.coordinator.state(delivered.assignment_id) == "bound"
+            with sqlite3.connect(_authority_database_path(run_uri)) as conn:
+                assert conn.execute("SELECT assignment_id, attempt_id FROM managed_attempt_bindings").fetchall() == [
+                    (delivered.assignment_id, delivered.attempt_id),
+                ]
+            poll = view.wait_for_work(session.session_id, "availability", sequence=1, wait_timeout_ms=1)
+            assert poll["result"] == "assignment"
+            assert cast(Mapping[str, object], poll["request"])["assignment_id"] == delivered.assignment_id
         summaries = cast(list[dict], daemon._execution._scheduling_waits.summaries(run_uri))
         by_assignment = {item["assignment_id"]: item for item in summaries}
         first_id = rejected[0].assignment_id if interruption == "withdrawn_offer" else rejected[0]["assignment_id"]

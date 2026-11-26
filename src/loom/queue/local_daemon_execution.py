@@ -12,6 +12,10 @@ from ._coordinator_run_progress import (
     LocalDaemonExecutionOutcome as LocalDaemonExecutionOutcome,
     _profile_satisfies_requirement,
 )
+from ._managed_dispatch import (
+    ManagedDispatch, _LocalCapacityObservation, _RemoteCandidateTarget,
+    local_offer_snapshot, managed_dispatch, remote_offer_snapshot,
+)
 from ._ready_window import ReadyWindowScheduler, ScanYield
 from ._coordinator_run_authority import _ScopedCoordinatorAuthority as _ScopedCoordinatorAuthority
 
@@ -46,6 +50,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
+    from ._agent_process_supervisor import ResidentWorkerLaunchProfile
+    from ._managed_local import _PreparedLocalWorkspace
     from ._owner_journals import SlurmStorageFacts, StorageObserver
 
 from loom.artifacts import ArtifactRef
@@ -88,7 +94,6 @@ from loom.queue._managed_local import (
     AssignmentState,
     ManagedAssignment,
     ManagedLocalError,
-    ManagedOfferSnapshot,
     ObserveRequest,
     ObserveResult,
     SQLiteAgentJournal,
@@ -149,6 +154,8 @@ from loom.pipeline.stores.authority import (
 )
 from loom.scheduling import (
     Candidate,
+    CandidateEvaluation,
+    SchedulingDecision,
     CapacityAtom,
     ComponentRegistry,
     ExactQuantity,
@@ -306,14 +313,6 @@ class _SlurmRetentionRequired(Exception):
             and self.evidence == freeze_plain_data(evidence, path="SLURM release evidence")
             and self.roots == freeze_plain_data(execution.config.coordinator_shared_roots, path="SLURM release roots")
         )
-
-
-@dataclass(frozen=True)
-class _LocalCapacityObservation:
-    candidate: Candidate
-    observations: Mapping[str, ObserveResult]
-    descriptors: Mapping[str, SchedulingComponentDescriptor]
-    sampled_at: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -644,21 +643,6 @@ def _build_scheduling_epoch(
         active_slurm_profiles=MappingProxyType(dict(active_slurm_profiles)),
         retained_slurm_profiles=MappingProxyType(dict(retained_slurm_profiles or {})),
     )
-
-
-@dataclass(frozen=True, slots=True)
-class _RemoteCandidateTarget:
-    agent_id: str
-    session_id: str
-    offer_id: str
-    availability_revision: str
-    scheduling_availability_revision: str
-    inventory_revision: str
-    offer: AgentOffer
-    profile: ResidentProfileDescriptor | SubmittedContainerCapability
-    availability_atoms: tuple[CapacityAtom, ...]
-    reflected_claim_ids: tuple[str, ...]
-    expires_ns: int = 0
 
 
 def _replacement_scheduling_identities(
@@ -6293,7 +6277,7 @@ class LocalDaemonExecution:
         authority: _ScopedCoordinatorAuthority,
         snapshot: AuthoritativeRunSnapshot,
         record: StageWorkRecord,
-        decision: object,
+        decision: SchedulingDecision,
         remote_targets: Mapping[str, _RemoteCandidateTarget],
         decision_as_of: str,
         execution_started: Callable[[], None],
@@ -6301,152 +6285,23 @@ class LocalDaemonExecution:
         epochs = self._cycle_context_epochs.get(admission.admission_id)
         if record.stage_work_id in self._local_preparing:
             return False
-        selected = getattr(decision, "selected")
-        claims = tuple(selected.claims)
-        if len({claim.resource_kind for claim in claims}) != len(claims):
-            raise QueueServiceError(
-                "managed daemon requires one exact claim per resource kind"
-            )
-        candidate_id = cast(str, getattr(decision, "candidate_id"))
-        remote_target = remote_targets.get(candidate_id)
+        selected = cast(CandidateEvaluation, decision.selected)
+        if len({claim.resource_kind for claim in selected.claims}) != len(selected.claims):
+            raise QueueServiceError("managed daemon requires one exact claim per resource kind")
+        remote_target = remote_targets.get(selected.candidate_id)
         if remote_target is None and len(self._local_preparing) >= max(2, self.config.cpu_capacity):
             return False
-        offer_id = (
-            remote_target.offer_id
-            if remote_target is not None
-            else f"offer-{record.stage_work_id}-{record.projection_revision}"
-        )
-        assignment_id = (
-            "assignment-"
-            + hashlib.sha256(
-                (
-                    admission.admission_id
-                    + "\0"
-                    + record.stage_work_id
-                    + "\0"
-                    + offer_id
-                    + "\0"
-                    + str(record.projection_revision)
-                ).encode("utf-8")
-            ).hexdigest()
-        )
-        claim_id = f"claim-{assignment_id}"
-        assignment = ManagedAssignment(
-            assignment_id=assignment_id,
-            run_uri=record.run_uri,
-            stage_work_id=record.stage_work_id,
-            stage_name=record.stage_name,
-            attempt=record.attempt,
-            attempt_id=record.attempt_id,
-            agent_id=(
-                remote_target.agent_id
-                if remote_target is not None
-                else self.config.machine_id
-            ),
-            session_id=(
-                remote_target.session_id
-                if remote_target is not None
-                else self.coordinator_epoch
-            ),
-            offer_id=offer_id,
-            claim_id=claim_id,
-        )
-        decision_planners = self._scheduling.planners_for_record(record)
+        planners = self._scheduling.planners_for_record(record)
         if remote_target is None:
             observation = self._cycle_local_offer
             if observation is None:
                 return False
-            observations = observation.observations
-            availability_revision = (
-                "local-"
-                + hashlib.sha256(
-                    "\0".join(
-                        observations[kind].availability_revision
-                        for kind in sorted(observations)
-                    ).encode()
-                ).hexdigest()
-            )
-            provider_descriptors = observation.descriptors
-            offer_snapshot = ManagedOfferSnapshot(
-                agent_id=self.config.machine_id,
-                session_id=self.coordinator_epoch,
-                # Slow preparation can outlive a peer's claim/release without
-                # changing this stage's projection. Bind the offer identity to
-                # the observed capacity so retry can publish fresh evidence.
-                offer_revision=offer_id + "-" + availability_revision,
-                snapshot_revision=self.coordinator_epoch,
-                inventory_revision=f"inventory-{self.coordinator_epoch}",
-                availability_revision=availability_revision,
-                component_descriptors=tuple(
-                    decision_planners[kind].descriptor
-                    for kind in sorted(provider_descriptors)
-                ),
-                provider_descriptors=tuple(
-                    provider_descriptors[kind] for kind in sorted(provider_descriptors)
-                ),
-                atoms=tuple(
-                    atom
-                    for kind in sorted(observations)
-                    for atom in observations[kind].atoms
-                ),
-                reflected_claim_ids=tuple(
-                    sorted(
-                        {
-                            live_claim_id
-                            for result in observations.values()
-                            for live_claim_id in result.live_claim_ids
-                        }
-                    )
-                ),
+            offer = local_offer_snapshot(
+                record, observation, planners, agent_id=self.config.machine_id, session_id=self.coordinator_epoch,
             )
         else:
-            provider_descriptors = {
-                descriptor.kind: descriptor
-                for descriptor in remote_target.offer.provider_descriptors
-            }
-            offer_snapshot = ManagedOfferSnapshot(
-                agent_id=remote_target.agent_id,
-                session_id=remote_target.session_id,
-                offer_revision=remote_target.offer_id,
-                snapshot_revision=(remote_target.scheduling_availability_revision),
-                inventory_revision=remote_target.inventory_revision,
-                availability_revision=(remote_target.scheduling_availability_revision),
-                component_descriptors=tuple(
-                    decision_planners[kind].descriptor
-                    for kind in sorted(provider_descriptors)
-                ),
-                provider_descriptors=tuple(
-                    provider_descriptors[kind] for kind in sorted(provider_descriptors)
-                ),
-                atoms=remote_target.availability_atoms,
-                reflected_claim_ids=remote_target.reflected_claim_ids,
-            )
-        canonical_offer_id = self.coordinator.publish_offer(offer_snapshot)
-        if canonical_offer_id != offer_id:
-            # Reusing unchanged capacity evidence must also reuse its durable
-            # identity.  Nothing has been persisted under the proposed ID yet.
-            offer_id = canonical_offer_id
-            assignment_id = (
-                "assignment-"
-                + hashlib.sha256(
-                    (
-                        admission.admission_id
-                        + "\0"
-                        + record.stage_work_id
-                        + "\0"
-                        + offer_id
-                        + "\0"
-                        + str(record.projection_revision)
-                    ).encode("utf-8")
-                ).hexdigest()
-            )
-            assignment = replace(
-                assignment,
-                assignment_id=assignment_id,
-                offer_id=offer_id,
-                claim_id=f"claim-{assignment_id}",
-            )
-        stage = intent.pipeline.get_stage(record.stage_name)
+            offer = remote_offer_snapshot(remote_target, planners)
+        offer_id = self.coordinator.publish_offer(offer)
         runtime = _worker_runtime(intent, record.stage_name)
         worker_request, _preparation_reason = self._prepared_ready_request(record, snapshot, intent)
         if worker_request is None:
@@ -6462,114 +6317,105 @@ class LocalDaemonExecution:
         _require_retained_resource_handoff_match(
             worker_request.resolved_runtime, runtime
         )
-        snapshot_revision = (
-            remote_target.scheduling_availability_revision
-            if remote_target is not None
-            else self.coordinator_epoch
+        dispatch = managed_dispatch(
+            admission.admission_id, record, decision, selected, planners, offer, offer_id=offer_id, as_of=decision_as_of,
         )
-        decision_receipt: dict[str, PlainData] = {
-            "policy_epoch": getattr(decision, "component_epoch"),
-            "policy_descriptor": getattr(decision, "policy_descriptor").to_dict(),
-            "stage_work_id": record.stage_work_id,
-            "candidate_id": assignment.agent_id,
-            "stage_work_revision": record.projection_revision,
-            "snapshot_revision": snapshot_revision,
-            "offer_revision": offer_id,
-            "score_summary": {"preference_vector": list(selected.preference_vector)},
-            "fallback_eligible": selected.fallback_eligible,
-            "as_of": decision_as_of,
-            "reason_codes": ["selected"],
-            "component_descriptors": [
-                decision_planners[kind].descriptor.to_dict()
-                for kind in sorted(claim.resource_kind for claim in claims)
-            ],
-            "provider_descriptors": [
-                provider_descriptors[kind].to_dict()
-                for kind in sorted(claim.resource_kind for claim in claims)
-            ],
-            "claim_contract_descriptors": [
-                descriptor.to_dict()
-                for descriptor in sorted(
-                    {claim.contract for claim in claims},
-                    key=lambda item: item.key,
-                )
-            ],
-        }
         if remote_target is not None:
-            inspected, _preparation_reason = self._prepared_input_descriptors(record, worker_request)
-            if inspected is None:
-                return False
-            materialized = self._assignment_input_descriptors(assignment.assignment_id, inspected)
-            remote_inputs = [descriptor for descriptor, _path in materialized]
-            input_paths = {descriptor.transfer_id: path for descriptor, path in materialized}
-            delivered = _ResidentAssignmentBundle.from_worker_request(
-                assignment_id=assignment.assignment_id,
-                stage_work_id=assignment.stage_work_id,
-                attempt_id=assignment.attempt_id,
-                offer_id=assignment.offer_id,
-                claim_id=assignment.claim_id,
-                worker_request=worker_request,
-                profile=remote_target.profile,
-                inputs=tuple(remote_inputs),
-                declared_outputs=tuple(sorted(stage.outputs)),
-                claims=claims,
-                provider_descriptors=tuple(
-                    provider_descriptors[claim.resource_kind] for claim in claims
-                ),
+            return self._dispatch_remote(
+                dispatch, remote_target, record, worker_request, admission, intent, snapshot, authority, epochs, execution_started,
             )
-            from ._shared_recovery import bind_delivery
-            with self._daemon_owner()._connection() as conn:
-                delivered = bind_delivery(
-                    delivered, conn, assignment.run_uri, self._daemon_owner().config.coordinator_shared_roots,
-                    session_id=remote_target.session_id, slurm_assignments=self.slurm_assignments,
-                    embedded=self._embedded_recovery,
-                    verify_trees=False, cancelled_attempts=_cancelled_stage_attempts(snapshot, record.stage_name),
-                )
-            verified, _preparation_reason = self._prepared_recovery_predecessors(record, delivered)
-            if verified is None:
-                return False
-            if self._attempt_cancel_requested(record.run_uri, record.attempt_id):
-                return False
-            self._scheduling_waits.record(record.run_uri, record.stage_name, "reservation")
-            reserved = False
+        return self._dispatch_local(
+            dispatch, record, worker_request, admission, intent, authority, snapshot.revision, epochs, execution_started,
+        )
+
+    def _prepare_remote_delivery(
+        self, dispatch: ManagedDispatch, target: _RemoteCandidateTarget, record: StageWorkRecord,
+        worker_request: StageWorkerRequest, declared_outputs: tuple[str, ...], snapshot: AuthoritativeRunSnapshot,
+    ) -> tuple[_ResidentAssignmentBundle, Mapping[str, Path]] | None:
+        assignment = dispatch.assignment
+        inspected, _preparation_reason = self._prepared_input_descriptors(record, worker_request)
+        if inspected is None:
+            return None
+        materialized = self._assignment_input_descriptors(assignment.assignment_id, inspected)
+        remote_inputs = [descriptor for descriptor, _path in materialized]
+        input_paths = {descriptor.transfer_id: path for descriptor, path in materialized}
+        delivered = _ResidentAssignmentBundle.from_worker_request(
+            assignment_id=assignment.assignment_id,
+            stage_work_id=assignment.stage_work_id,
+            attempt_id=assignment.attempt_id,
+            offer_id=assignment.offer_id,
+            claim_id=assignment.claim_id,
+            worker_request=worker_request,
+            profile=target.profile,
+            inputs=tuple(remote_inputs),
+            declared_outputs=declared_outputs,
+            claims=dispatch.claims,
+            provider_descriptors=dispatch.providers,
+        )
+        from ._shared_recovery import bind_delivery
+        with self._daemon_owner()._connection() as conn:
+            delivered = bind_delivery(
+                delivered, conn, assignment.run_uri, self._daemon_owner().config.coordinator_shared_roots,
+                session_id=target.session_id, slurm_assignments=self.slurm_assignments,
+                embedded=self._embedded_recovery,
+                verify_trees=False, cancelled_attempts=_cancelled_stage_attempts(snapshot, record.stage_name),
+            )
+        verified, _preparation_reason = self._prepared_recovery_predecessors(record, delivered)
+        if verified is None:
+            return None
+        return delivered, input_paths
+
+    def _dispatch_remote(
+        self, dispatch: ManagedDispatch, target: _RemoteCandidateTarget, record: StageWorkRecord,
+        worker_request: StageWorkerRequest, admission: LocalDaemonAdmission, intent: ManagedLocalIntent, snapshot: AuthoritativeRunSnapshot,
+        authority: _ScopedCoordinatorAuthority, epochs: tuple[str | None, str | None] | None,
+        execution_started: Callable[[], None],
+    ) -> bool:
+        stage = intent.pipeline.get_stage(record.stage_name)
+        prepared = self._prepare_remote_delivery(
+            dispatch, target, record, worker_request, tuple(sorted(stage.outputs)), snapshot,
+        )
+        if prepared is None or self._attempt_cancel_requested(record.run_uri, record.attempt_id):
+            return False
+        delivered, input_paths = prepared
+        assignment = dispatch.assignment
+        self._scheduling_waits.record(record.run_uri, record.stage_name, "reservation")
+        reserved = False
+        try:
+            self.coordinator.reserve(
+                assignment,
+                dispatch.claims,
+                max_parallel_stages=intent.max_parallel_stages,
+                decision_receipt=dispatch.receipt, decision_revision=snapshot.revision,
+                _reservation_transaction=lambda: self._reservation_transaction(record, epochs, target),
+            )
+            reserved = True
+            self._record_reservation(record, assignment.assignment_id, target.offer_id)
             try:
-                self.coordinator.reserve(
-                    assignment,
-                    claims,
-                    max_parallel_stages=intent.max_parallel_stages,
-                    decision_receipt=decision_receipt, decision_revision=snapshot.revision,
-                    _reservation_transaction=lambda: self._reservation_transaction(record, epochs, remote_target),
+                authority.bind_prepared_attempt(
+                    assignment.run_uri, assignment_id=assignment.assignment_id,
+                    attempt_id=assignment.attempt_id, expected_revision=snapshot.revision,
                 )
-                reserved = True
-                self._record_reservation(record, assignment.assignment_id, remote_target.offer_id)
-                try:
-                    authority.bind_prepared_attempt(
-                        assignment.run_uri, assignment_id=assignment.assignment_id,
-                        attempt_id=assignment.attempt_id, expected_revision=snapshot.revision,
-                    )
-                except PreparedAttemptBindRejected:
-                    self.coordinator.release_unbound(assignment.assignment_id)
-                    self._refresh_rejected_decision(admission)
-                    return False
-                self.coordinator.advance(
-                    assignment.assignment_id,
-                    expected="reserved",
-                    next_state="bound",
+            except PreparedAttemptBindRejected:
+                self.coordinator.release_unbound(assignment.assignment_id)
+                self._refresh_rejected_decision(admission)
+                return False
+            self.coordinator.advance(
+                assignment.assignment_id,
+                expected="reserved",
+                next_state="bound",
+            )
+            try:
+                _target_remote_delivery(
+                    self._daemon_owner(),
+                    session_id=target.session_id,
+                    availability_revision=target.availability_revision,
+                    request=delivered,
+                    run_uri=assignment.run_uri,
+                    input_paths=input_paths,
                 )
-                try:
-                    _target_remote_delivery(
-                        self._daemon_owner(),
-                        session_id=remote_target.session_id,
-                        availability_revision=remote_target.availability_revision,
-                        request=delivered,
-                        run_uri=assignment.run_uri,
-                        input_paths=input_paths,
-                    )
-                except (QueueConflictError, QueueServiceError):
-                    if self._remote_delivery_retained(assignment.assignment_id):
-                        self._ready_preparations.discard((record.run_uri, record.stage_name))
-                        execution_started()
-                        return True
+            except (QueueConflictError, QueueServiceError):
+                if not self._remote_delivery_retained(assignment.assignment_id):
                     authority.unbind_prepared_attempt(
                         assignment.run_uri,
                         assignment_id=assignment.assignment_id,
@@ -6580,20 +6426,49 @@ class LocalDaemonExecution:
                         reopen_offer=True,
                     )
                     return False
-            except Exception as error:
-                # Capacity and cancellation refusals leave no claim. An ambiguous
-                # commit, bind or delivery must be joined by the run recovery owner.
-                if reserved or not isinstance(error, (ManagedLocalError, CancelledError)):
-                    self._pending_remote_reservations.setdefault(record.run_uri, {})[assignment.assignment_id] = assignment
-                raise
-            self._ready_preparations.discard((record.run_uri, record.stage_name))
-            execution_started()
-            return True
-        if self._attempt_cancel_requested(record.run_uri, record.attempt_id):
-            return False
-        from functools import partial
+        except Exception as error:
+            if reserved or not isinstance(error, (ManagedLocalError, CancelledError)):
+                self._pending_remote_reservations.setdefault(record.run_uri, {})[assignment.assignment_id] = assignment
+            raise
+        self._ready_preparations.discard((record.run_uri, record.stage_name))
+        execution_started()
+        return True
+
+    def _prepare_local_dispatch(
+        self, dispatch: ManagedDispatch, record: StageWorkRecord, worker_request: StageWorkerRequest,
+        epochs: tuple[str | None, str | None] | None, *, journal: SQLiteAgentJournal,
+        agent_root: Path, launch_profile: ResidentWorkerLaunchProfile,
+    ) -> _PreparedLocalWorkspace | None:
         from loom.fingerprints import hash_mapping
 
+        # The request phase already owns the exact worker inputs. Preserve the
+        # staged assignment across observation-only projection refreshes, but
+        # a new offer, policy, claim, or epoch requires its own preparation.
+        workspace_identity = hash_mapping({
+            "epochs": list(epochs) if epochs is not None else None,
+            "decision": {key: value for key, value in dispatch.receipt.items()
+                         if key not in {"stage_work_revision", "as_of"}},
+            "claims": [claim.fingerprint for claim in dispatch.claims],
+        })
+        stage_key = (record.run_uri, record.stage_name)
+        prepared, _reason = self._ready_preparations.poll(
+            stage_key, workspace_identity, partial(
+                _prepare_local_workspace, assignment=dispatch.assignment, worker_request=worker_request,
+                claims=dispatch.claims, providers=self.providers, journal=journal, run_store=self.run_store,
+                decision_receipt=dict(dispatch.receipt), agent_root=agent_root,
+                resident_launch_profile=launch_profile, durable_files=self.config.durable_files,
+                embedded_recovery=self._embedded_recovery,
+            ), phase="local-workspace",
+        )
+        return prepared
+
+    def _dispatch_local(
+        self, dispatch: ManagedDispatch, record: StageWorkRecord, worker_request: StageWorkerRequest,
+        admission: LocalDaemonAdmission, intent: ManagedLocalIntent, authority: _ScopedCoordinatorAuthority,
+        decision_revision: BackendRevision, epochs: tuple[str | None, str | None] | None, execution_started: Callable[[], None],
+    ) -> bool:
+        if self._attempt_cancel_requested(record.run_uri, record.attempt_id):
+            return False
         journal = self.journal
         supervisor = self.supervisor
         agent_root = self.config.agent_root
@@ -6603,24 +6478,8 @@ class LocalDaemonExecution:
         if agent_root is None or launch_profile is None:
             raise QueueServiceError("local assignment binding is unavailable")
 
-        # The request phase already owns the exact worker inputs. Preserve the
-        # staged assignment across observation-only projection refreshes, but
-        # a new offer, policy, claim, or epoch requires its own preparation.
-        workspace_identity = hash_mapping({
-            "epochs": list(epochs) if epochs is not None else None,
-            "decision": {key: value for key, value in decision_receipt.items()
-                         if key not in {"stage_work_revision", "as_of"}},
-            "claims": [claim.fingerprint for claim in claims],
-        })
-        stage_key = (record.run_uri, record.stage_name)
-        prepared, _reason = self._ready_preparations.poll(
-            stage_key, workspace_identity, partial(
-                _prepare_local_workspace, assignment=assignment, worker_request=worker_request,
-                claims=claims, providers=self.providers, journal=journal, run_store=self.run_store,
-                decision_receipt=dict(decision_receipt), agent_root=agent_root,
-                resident_launch_profile=launch_profile, durable_files=self.config.durable_files,
-                embedded_recovery=self._embedded_recovery,
-            ), phase="local-workspace",
+        prepared = self._prepare_local_dispatch(
+            dispatch, record, worker_request, epochs, journal=journal, agent_root=agent_root, launch_profile=launch_profile,
         )
         if prepared is None:
             self._scheduling_waits.record(record.run_uri, record.stage_name, "request_preparation")
@@ -6635,8 +6494,8 @@ class LocalDaemonExecution:
         try:
             self._scheduling_waits.record(record.run_uri, record.stage_name, "reservation")
             self.coordinator.reserve(
-                assignment, claims, max_parallel_stages=intent.max_parallel_stages,
-                decision_receipt=decision_receipt, decision_revision=snapshot.revision,
+                assignment, dispatch.claims, max_parallel_stages=intent.max_parallel_stages,
+                decision_receipt=dispatch.receipt, decision_revision=decision_revision,
                 _reservation_transaction=lambda: self._reservation_transaction(record, epochs),
             )
         except (ManagedLocalError, CancelledError):
@@ -6656,9 +6515,9 @@ class LocalDaemonExecution:
         def observe_and_finalize() -> None:
             _run_reserved_local_assignment(
                 prepared, coordinator=self.coordinator, authority=authority, journal=journal,
-                decision_revision=snapshot.revision,
                 providers=self.providers, run_store=self.run_store, supervisor=supervisor,
                 resident_launch_profile=launch_profile, embedded_recovery=self._embedded_recovery,
+                decision_revision=decision_revision,
                 cancellation_requested=lambda: self._install_cancellation_if_requested(
                     admission, authority, intent.plan.stage_order, attempt_id=assignment.attempt_id
                 ),
@@ -6671,7 +6530,7 @@ class LocalDaemonExecution:
         self._local_assignment_futures[assignment_id] = future
         self._local_preparing[record.stage_work_id] = assignment_id
         future.add_done_callback(lambda _, uri=record.run_uri: self._completed_local_runs.post(uri))
-        self._ready_preparations.discard(stage_key)
+        self._ready_preparations.discard((record.run_uri, record.stage_name))
         daemon._activate_admission(admission.admission_id)
         return True
 
