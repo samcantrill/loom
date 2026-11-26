@@ -646,8 +646,8 @@ def test_native_submit_error_after_commit_does_not_claim_refusal(
     )
     submit = daemon._submit
 
-    def failed_receipt(request: LocalDaemonAdmissionRequest):  # type: ignore[no-untyped-def]
-        submit(request)
+    def failed_receipt(request: LocalDaemonAdmissionRequest, *, direct_principal: str):
+        submit(request, direct_principal=direct_principal)
         raise QueueStorageError("post-commit admission receipt read failed")
 
     monkeypatch.setattr(daemon, "_submit", failed_receipt)

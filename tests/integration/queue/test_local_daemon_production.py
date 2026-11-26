@@ -3684,6 +3684,12 @@ def test_socket_diagnostic_redacts_unexpected_exception_text(
             raise RuntimeError(secret)
 
     class _FailingDaemon:
+        preparation_available = False
+        _epoch = "epoch"
+
+        def _require_started(self):
+            return "coordinator"
+
         def _require_view_role(self, _principal, _role):
             pass
 
@@ -3707,9 +3713,8 @@ def test_socket_diagnostic_redacts_unexpected_exception_text(
     message = records[0].getMessage()
     assert secret not in message
     diagnostic = json.loads(message.split(": ", 1)[1])
-    # The public status call first performs its native handshake. The local
-    # diagnostic names the failed boundary; the client retains caller context.
-    assert diagnostic["operation"] == "handshake"
+    # Negotiation succeeds before dispatch reaches the failing application method.
+    assert diagnostic["operation"] == "status"
     assert raised.value.operation == "status"
     assert diagnostic["cause_type"] == "builtins.RuntimeError"
     assert 0 < len(diagnostic["frames"]) <= 16

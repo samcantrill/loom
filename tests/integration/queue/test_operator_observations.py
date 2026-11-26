@@ -151,30 +151,32 @@ def test_observation_matrix_preserves_roots_and_control_state(owner, monkeypatch
         expired_at = (parse_timestamp(daemon._clock()) + timedelta(seconds=61)).isoformat()
         monkeypatch.setattr(daemon, "_clock", lambda: expired_at)
         # Advance accepted time within policy before taking the read-only snapshot.
-        daemon.status()
-    before = dump(daemon.config.control_database)
-    files = set(daemon.config.coordinator_root.rglob("*"))
-    value = operator.observe_agent(session.agent_id)
-    assert value.owner == daemon.status().coordinator_id
-    assert value.value["agent_root_id"] == "remote-root"
-    assert value.value["connected"] == (case != "stale")
-    assert value.value["connected_basis"] == "session_and_capacity_offer"
-    assert value.value["offer_freshness"] == (
-        "expired" if case == "stale" else "superseded" if case == "drained" else "fresh"
-    )
-    assert value.value["drained"] == (case == "drained")
-    if case == "occupancy":
-        assert value.value["available"] is True  # CPU remains available.
-        assert value.value["resource_status"][0]["reason_code"] == "external_occupancy"
-    if case in {"drained", "stale"}:
-        assert value.value["available"] is False
-        assert daemon.agent(session.agent_id, include_capacity=True).offered_capacity is None
-    assert value.freshness == ("retained" if case == "stale" else "current")
-    status = operator.observe_status()
-    assert status.value["configuration_revision"] == "1"
-    assert status.value["scheduling_fingerprint"].startswith("scheduling-")
-    assert dump(daemon.config.control_database) == before
-    assert set(daemon.config.coordinator_root.rglob("*")) == files
+        daemon._accepted_snapshot()
+    # Exclude journal files created by unrelated background scheduling transactions.
+    with daemon._reconcile_guard:
+        before = dump(daemon.config.control_database)
+        files = set(daemon.config.coordinator_root.rglob("*"))
+        value = operator.observe_agent(session.agent_id)
+        assert value.owner == daemon.status().coordinator_id
+        assert value.value["agent_root_id"] == "remote-root"
+        assert value.value["connected"] == (case != "stale")
+        assert value.value["connected_basis"] == "session_and_capacity_offer"
+        assert value.value["offer_freshness"] == (
+            "expired" if case == "stale" else "superseded" if case == "drained" else "fresh"
+        )
+        assert value.value["drained"] == (case == "drained")
+        if case == "occupancy":
+            assert value.value["available"] is True  # CPU remains available.
+            assert value.value["resource_status"][0]["reason_code"] == "external_occupancy"
+        if case in {"drained", "stale"}:
+            assert value.value["available"] is False
+            assert daemon.agent(session.agent_id, include_capacity=True).offered_capacity is None
+        assert value.freshness == ("retained" if case == "stale" else "current")
+        status = operator.observe_status()
+        assert status.value["configuration_revision"] == "1"
+        assert status.value["scheduling_fingerprint"].startswith("scheduling-")
+        assert dump(daemon.config.control_database) == before
+        assert set(daemon.config.coordinator_root.rglob("*")) == files
 
 
 def test_cli_agent_capacity_reads_current_offers_without_gpu_monitor(owner, monkeypatch, capsys):

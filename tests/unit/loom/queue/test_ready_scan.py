@@ -59,6 +59,7 @@ def test_ready_gpu_work_waits_for_its_prepared_context_then_dispatches(monkeypat
     record: Any = SimpleNamespace(
         admission_id=admission.admission_id, run_uri=admission.run_uri,
         attempt_id="fit-1", stage_work_id="fit-work", stage_name="fit",
+        projection_revision=1, ready_at="2026-11-26T00:00:00Z",
         placement=SimpleNamespace(route=SimpleNamespace(
             kind=ExecutionRouteKind.SLURM, profile_id="gpu", profile_configuration_fingerprint="profile",
         )),
@@ -83,8 +84,9 @@ def test_ready_gpu_work_waits_for_its_prepared_context_then_dispatches(monkeypat
         _cycle_contexts={}, _admission_context=open_context,
         _scheduling_waits=SchedulingWaits(),
         cancellation_operation=lambda identity: None,
-        _remote_candidates=lambda: {}, agent_id=None,
-        config=SimpleNamespace(resident_worker_launch_profile=None, control_database=None,
+        _remote_candidates=lambda: {}, agent_id=None, _full_offer_hosts=set(),
+        config=SimpleNamespace(agent_policy=SimpleNamespace(agents=()),
+                               resident_worker_launch_profile=None, control_database=None,
                                connect_database=lambda _: nullcontext(None)),
         _scheduling=SimpleNamespace(kernel=lambda records: SimpleNamespace(
             decide=lambda **kwargs: SimpleNamespace(state=PolicyDecisionState.WAIT),
