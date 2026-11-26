@@ -157,6 +157,38 @@ lower bound because the selector does not probe every possible placement for
 measurement. A missing observation is reported as unknown. These measurements
 use the normal scheduling decisions and the bounded diagnostic writer.
 
+For placement qualification, start the coordinator with
+`LOOM_QUALIFICATION_TIMINGS=all` and pass its stderr to the offline report.
+
+```bash
+python tools/startup_timings.py coordinator.log | jq '.context_loader'
+```
+
+The report measures three intervals for each fresh context request.
+
+| Interval | Boundaries |
+| --- | --- |
+| Request to loader start | First call requesting a fresh context, including a call refused for capacity, through entry on the loader thread. |
+| Loader start to available | Worker entry through successful validation and scoped authority binding. |
+| Available to first consumer | Worker completion through admission activation, the first run reconciliation step, or dispatch acquiring an authority observation, consuming a snapshot or queuing preparation for that stage. |
+
+Each request carries its admission ID, admission revision, coordinator and scheduling
+epochs, and a process-local request ID. A resumed consumer keeps the original ID.
+An admission can reload several times at the same revision. The report counts these
+loads and groups validation outcomes by byte-verified cache hit, cold load and
+changed dependencies. Scoped-context discard events identify the owning component
+and its reason. Validated-intent cache evictions are reported separately because a
+continuation can still own a scoped context after its cache entry leaves.
+
+The first request begins when discovery, dispatch or resumption actually visits the
+loader interface. Earlier time waiting for a READY-page visit belongs to the stage
+scheduling summary. At most 256 refused requests retain their first observation.
+Eviction of that observation records `observation_limit`. A truncated log, a
+superseded request or a diagnostic dropped by the bounded writer can leave an
+interval unknown. The report uses measured endpoint pairs for p50, p95, p99 and
+maximum, and reports coverage for each interval. Contexts can serve multiple stages
+and load concurrently, so summing their intervals does not give fleet elapsed time.
+
 For a single-stage workload, supply client, coordinator, agent and supervisor
 logs from one deployment to the offline report:
 

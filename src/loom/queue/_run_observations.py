@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot
     from ._bulk_operations import BulkOperations
     from ._context_preparation import PreparedAdmissionContext
+    from ._context_timing import ContextTiming
     from .local_daemon import LocalDaemonAdmission
     from .local_daemon_execution import LocalDaemonExecutionOutcome
 
@@ -316,7 +317,7 @@ class DispatchObservations:
 
     def poll(
         self, admission: LocalDaemonAdmission, epochs: Epochs, load: Callable[[], AuthoritativeRunSnapshot],
-        *, work_id: str, peers: set[str],
+        *, work_id: str, peers: set[str], timing: ContextTiming | None = None,
     ) -> AuthoritativeRunSnapshot | None:
         identity = admission.admission_id
         read = self._reads.get(identity)
@@ -325,11 +326,15 @@ class DispatchObservations:
             read = None
         if read is None:
             self._start(admission, epochs, load, peers | {work_id}, work_id)
+            if timing is not None and identity in self._reads:
+                timing.advance("dispatch_observation")
             return None
         if not read.work_ids:
             read.work_ids.update(peers)
             if not read.future.done():
                 read.future.add_done_callback(lambda _: self._wake())
+        if timing is not None and work_id not in read.selected:
+            timing.advance("dispatch_observation")
         read.work_ids.add(work_id)
         read.selected.add(work_id)
         if not read.future.done():
@@ -338,6 +343,8 @@ class DispatchObservations:
         if isinstance(result, Exception):
             self.invalidate_admission(identity)
             raise result
+        if timing is not None:
+            timing.advance("stage_selection")
         return result
 
     def close(self) -> None:

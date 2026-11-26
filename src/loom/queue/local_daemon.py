@@ -81,6 +81,7 @@ from .errors import QueueConflictError, QueueServiceError, QueueStorageError, _A
 from ._admission_scan import LEGACY_CANCELLED, AdmissionScan, SchedulingAdmissions, ensure_scan_index, ensure_retry_index
 from ._service_signals import _ChangeConnection, _ChangeSignal, _KeyedWaiters, _ServiceSignal, write_status
 from ._recovery_retry import _RecoveryRetry
+from ._context_preparation import PendingContext
 from ._run_observations import RunObservation, RunObservationPending
 
 if TYPE_CHECKING:
@@ -2805,7 +2806,10 @@ class LocalDaemon:
                 owner.open_owner_stores()
                 checked = (owner, epochs)
             with self._reconcile_guard:
-                return self._reconcile_once(checked)
+                try:
+                    return self._reconcile_once(checked)
+                finally:
+                    self._contexts.finish_handoffs()
 
 
     def _reconcile_once(self, checked=None) -> tuple[LocalDaemonAdmission, ...]:
@@ -2861,9 +2865,15 @@ class LocalDaemon:
         )
         execution.retain_dispatch_contexts(invalidated, epochs, bulk.active_runs() | self._resuming_runs.keys())
         self._contexts.begin_cycle(minimum_interval=self.config.poll_interval_seconds, invalidated=invalidated)
-        prepared = {item.admission.admission_id: item for item in (
-            *self._contexts.completed(), *execution.run_observations.completed(),
-        )}
+        prepared: dict[str, PendingContext | RunObservation] = {
+            item.admission.admission_id: item for item in self._contexts.completed()
+        }
+        for observation in execution.run_observations.completed():
+            identity = observation.admission.admission_id
+            other = prepared.get(identity)
+            if isinstance(other, PendingContext):
+                other.discard("run_observation_preferred")
+            prepared[identity] = observation
         waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] = {}
         for preparation in sorted(prepared.values(), key=lambda item: AdmissionScan.key(item.admission)):
             admission = preparation.admission
@@ -2871,12 +2881,16 @@ class LocalDaemon:
                 try:
                     current = self._admission(admission.admission_id)
                 except AdmissionNotFoundError:
+                    if isinstance(preparation, PendingContext):
+                        preparation.discard("admission_missing")
                     execution.run_observations.discard(admission.admission_id, bulk)
                     continue
                 epochs = (self._epoch, self._scheduling_epoch)
             if preparation.epochs != epochs or preparation.admission.revision != current.revision:
                 if isinstance(preparation, RunObservation):
                     execution.run_observations.discard(admission.admission_id, bulk)
+                else:
+                    preparation.discard("epoch_changed" if preparation.epochs != epochs else "admission_revision_changed")
                 self._wake.set()
                 continue
             admission = current
@@ -2884,6 +2898,8 @@ class LocalDaemon:
             progress = (admission.revision, self._scheduling_epoch)
             retry = self._admission_retries.get(admission.run_uri)
             if retry is not None and not retry.ready(progress):
+                if isinstance(preparation, PendingContext):
+                    preparation.discard("retry_backoff")
                 continue
             try:
                 context = preparation.result()
@@ -4278,9 +4294,9 @@ class LocalDaemon:
         )
         return sequence
 
-    def _activate_admission(self, admission_id: str) -> None:
+    def _activate_admission(self, admission_id: str) -> bool:
         with self._connection() as conn:
-            write_status(
+            changed = write_status(
                 conn, "admission",
                 "UPDATE managed_admissions SET state = ?, blocked_reason = NULL, "
                 "revision = revision + 1 "
@@ -4296,6 +4312,7 @@ class LocalDaemon:
                 ),
             )
             conn.commit()
+            return changed.rowcount > 0
 
     def _admission_for_queue_item(self, queue_item_id: str) -> LocalDaemonAdmission:
         with self._connection() as conn:

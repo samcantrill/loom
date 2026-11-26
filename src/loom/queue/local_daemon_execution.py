@@ -204,6 +204,7 @@ from .local_daemon import (
     _default_scheduling_components,
 )
 from ._context_preparation import PreparedAdmissionContext
+from ._context_timing import timing_for
 from ._coordinator_transactions import sqlite_busy
 from .local_daemon_runtime import load_managed_local_runtime_record
 from ._agent_slurm import AgentSlurmJobs, SlurmSubmissionProjection
@@ -1345,7 +1346,7 @@ class LocalDaemonExecution:
         coordinator_epoch: str,
         scheduling_epoch: str,
         cancellation_operation: Callable[[str], str | None],
-        admission_activated: Callable[[str], None],
+        admission_activated: Callable[[str], bool | None],
         daemon: LocalDaemon | None = None,
     ) -> None:
         self.config = config
@@ -1560,7 +1561,8 @@ class LocalDaemonExecution:
         self._slurm_chunk_futures.clear()
         self._pending_local_assignment_reconciliation.clear()
         self._local_assignment_retries.clear()
-        self._cycle_contexts.clear()
+        for identity in tuple(self._cycle_contexts):
+            self.discard_dispatch_context(identity, reason="shutdown")
         self._cycle_context_epochs.clear()
         self._cycle_context_revisions.clear()
 
@@ -1733,8 +1735,10 @@ class LocalDaemonExecution:
                 future.add_done_callback(resume_run)
             self._local_assignment_futures[assignment_id] = future
 
-    def discard_dispatch_context(self, identity: str) -> None:
-        self._cycle_contexts.pop(identity, None)
+    def discard_dispatch_context(self, identity: str, *, reason: str) -> None:
+        context = self._cycle_contexts.pop(identity, None)
+        if context is not None and (timing := timing_for(context)) is not None:
+            timing.discard("retained", reason)
         self._cycle_context_epochs.pop(identity, None)
         self._cycle_context_revisions.pop(identity, None)
 
@@ -1759,8 +1763,12 @@ class LocalDaemonExecution:
             | self.dispatch_observations.requested_runs()
         ) - invalidated
         for identity, (intent, _) in tuple(self._cycle_contexts.items()):
-            if intent.plan.run_uri not in continuing or self._cycle_context_epochs.get(identity) != epochs:
-                self.discard_dispatch_context(identity)
+            if intent.plan.run_uri in invalidated:
+                self.discard_dispatch_context(identity, reason="run_invalidated")
+            elif self._cycle_context_epochs.get(identity) != epochs:
+                self.discard_dispatch_context(identity, reason="epoch_changed")
+            elif intent.plan.run_uri not in continuing:
+                self.discard_dispatch_context(identity, reason="no_continuation")
 
     def next_local_retry_at(self, now: float) -> float | None:
         """Wake for a pending replay without rescheduling its running observer."""
