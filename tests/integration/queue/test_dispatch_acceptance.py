@@ -7,7 +7,9 @@ from collections.abc import Mapping
 from dataclasses import replace
 import hashlib
 import os
+from pathlib import Path
 import sqlite3
+import sys
 from threading import Event
 import time
 
@@ -17,14 +19,14 @@ from loom.pipeline.stores import LocalRunStore
 from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
 from loom.queue import LocalDaemon, LocalDaemonAdmissionRequest, LocalDaemonPrincipal, LocalDaemonRole
 from loom.queue._remote_stage_execution import (
-    REGULAR_FILE_RELAY_CAPABILITY, REMOTE_EXECUTION_CAPABILITY, ResidentProfileDescriptor,
+    REGULAR_FILE_RELAY_CAPABILITY, REMOTE_EXECUTION_CAPABILITY, ResidentExecutionProfile, ResidentProfileDescriptor,
 )
 from loom.queue._run_observations import DispatchObservations
+from loom.queue.agent_session_transport import _resident_provider_descriptors
 from loom.queue.agent_sessions import AgentOffer, AgentPrincipalPolicy, AgentRegistration
 from tests.integration.queue.test_local_daemon_production import (
     _daemon_config, _launch_profile, _persist_sleep_run, _supervisor_launch_count,
 )
-from tests.support.agent_sessions import _provider_descriptors
 
 pytestmark = [
     pytest.mark.integration,
@@ -43,6 +45,7 @@ def test_slow_selection_delivers_every_sibling_once_to_multiple_agents(tmp_path,
     agents = [f"host-{n}" for n in range(2 * len(stages))]
     capabilities = ("python", REMOTE_EXECUTION_CAPABILITY, REGULAR_FILE_RELAY_CAPABILITY)
     descriptor = ResidentProfileDescriptor.from_dict(_launch_profile().descriptor)
+    profile = ResidentExecutionProfile(descriptor, tmp_path, Path(sys.executable))
     base = _daemon_config(tmp_path)
     policy = replace(base.agent_policy, agents=tuple(
         AgentPrincipalPolicy(name, name, name, ("default",), capabilities) for name in agents
@@ -81,7 +84,7 @@ def test_slow_selection_delivers_every_sibling_once_to_multiple_agents(tmp_path,
             ))
             offer = AgentOffer(session.session_id, session.coordinator_epoch, session.config_revision,
                                session.inventory_revision, session.availability_revision, 1, 0, 120,
-                               _provider_descriptors("cpu"), resident_profiles=(descriptor,),
+                               _resident_provider_descriptors(profile, name), resident_profiles=(descriptor,),
                                max_concurrent_assignments=1)
             view.publish_offer(offer, idempotency_key="initial")
             sessions[session.session_id] = (view, offer)
