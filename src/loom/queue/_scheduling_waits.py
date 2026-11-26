@@ -23,6 +23,42 @@ class _Wait:
 
 
 @dataclass(slots=True)
+class _Prequeue:
+    ready_ns: int
+    since_ns: int
+    reason: str
+    queued_ns: int | None = None
+    totals: dict[str, int] = field(default_factory=dict)
+
+    def wait(self, reason: str, now: int) -> None:
+        if self.queued_ns is None and self.reason != reason:
+            self.totals[self.reason] = self.totals.get(self.reason, 0) + now - self.since_ns
+            self.reason, self.since_ns = reason, now
+
+    def queued(self, stamp: int) -> None:
+        if self.queued_ns is None:
+            # A reopened projection can reuse a request queued during an earlier
+            # reservation. Its preparation time belongs only to that earlier cycle.
+            if stamp >= self.since_ns:
+                self.wait("queued", stamp)
+            self.queued_ns = stamp
+
+    def summary(self, outcome: str) -> dict[str, PlainData]:
+        waits: dict[str, PlainData] | None = None
+        if self.queued_ns is None:
+            status = "inapplicable" if outcome in {"left_ready", "superseded"} else "missing"
+        elif self.queued_ns < self.ready_ns:
+            status = "reused"
+        elif self.reason == "queued":
+            waits = dict(self.totals)
+            status = "observed"
+        else:
+            status = "missing"
+        return {"prequeue_status": status, "prequeue_wait_ns": waits,
+                "prequeue_ready_ns": self.ready_ns, "prequeue_queued_ns": self.queued_ns}
+
+
+@dataclass(slots=True)
 class _Attempt:
     work_id: str
     projection_revision: int
@@ -31,6 +67,7 @@ class _Attempt:
     admission_id: str
     boundary: str
     since_ns: int
+    prequeue: _Prequeue
     totals: dict[str, int] = field(default_factory=dict)
     offer: str | None = None
     confirmed_ns: int = 0
@@ -70,25 +107,46 @@ class SchedulingWaits:
         self._epochs: tuple[str | None, str | None] | None = None
         self._lock = Lock()
 
-    def ready(self, record: StageWorkRecord) -> None:
+    def ready(self, record: StageWorkRecord, *, scanned: bool = False) -> None:
         key = record.run_uri, record.stage_name
         with self._lock:
             previous = self._attempts.get(key)
             if previous is not None and previous.work_id == record.stage_work_id:
+                if record.projection_revision < previous.ready_revision:
+                    return
                 previous.projection_revision = max(previous.projection_revision, record.projection_revision)
+                if scanned and previous.prequeue.reason == "first_scan":
+                    previous.prequeue.wait("unknown", monotonic_ns())
                 return
             if (record.stage_work_id, record.projection_revision) in self._finished:
                 return
             if previous is not None:
                 self._finish(key, "superseded", None)
+            now = monotonic_ns()
             self._attempts[key] = _Attempt(record.stage_work_id, record.projection_revision,
                                            record.projection_revision, record.attempt_id,
-                                           record.admission_id, "capacity_unknown", monotonic_ns())
+                                           record.admission_id, "capacity_unknown", now,
+                                           _Prequeue(now, now, "unknown" if scanned else "first_scan"))
             if len(self._attempts) > self._limit:
                 self._finish(next(iter(self._attempts)), "observation_evicted", None)
         milestone("attempt_ready", stage_work_id=record.stage_work_id, attempt_id=record.attempt_id,
                   admission_id=record.admission_id, run_uri=record.run_uri, stage_name=record.stage_name,
                   ready_at=record.ready_at, projection_revision=record.projection_revision)
+
+    def prequeue(self, record: StageWorkRecord, reason: str) -> None:
+        with self._lock:
+            attempt = self._attempts.get((record.run_uri, record.stage_name))
+            if (attempt is not None and attempt.work_id == record.stage_work_id
+                and record.projection_revision >= attempt.ready_revision
+                and attempt.prequeue.queued_ns is None and reason != attempt.prequeue.reason):
+                attempt.prequeue.wait(reason, monotonic_ns())
+
+    def queued(self, record: StageWorkRecord, stamp: int) -> None:
+        with self._lock:
+            attempt = self._attempts.get((record.run_uri, record.stage_name))
+            if (attempt is not None and attempt.work_id == record.stage_work_id
+                and record.projection_revision >= attempt.ready_revision):
+                attempt.prequeue.queued(stamp)
 
     def eligible(self, record: StageWorkRecord, offer: str, expires: int, available: int | None) -> None:
         with self._lock:
@@ -150,6 +208,7 @@ class SchedulingWaits:
             "run_uri": key[0], "stage_name": key[1], "result": outcome,
             "eligible_request_ready_ns": attempt.eligible_request_ready_ns,
             "saw_eligible_offer": attempt.saw_eligible_offer, "wait_ns": dict(attempt.totals),
+            **attempt.prequeue.summary(outcome),
         }
         identity = (attempt.work_id, attempt.projection_revision)
         self._finished[identity] = summary

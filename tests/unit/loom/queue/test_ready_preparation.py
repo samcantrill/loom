@@ -226,10 +226,12 @@ def test_early_retention_leaves_workers_and_request_owners_for_demand(monkeypatc
             assert pool.can_anticipate(key)
             pool.poll(key, name, lambda: True, work_id=name, resource_class="cpu", speculative=True)
             assert not pool.can_anticipate(("early", "next"))
+            assert pool.anticipation_wait(("early", "next")) == "early_build_pending"
             workers.complete()
             assert pool.request_for_descriptors(key, name) == (True, None)
         assert completions == ["0", "1", "2", "3"]
         assert not pool.can_anticipate(("early", "next"))
+        assert pool.anticipation_wait(("early", "next")) == "early_retention_limit"
         assert pool.poll(("early", "next"), "next", lambda: True, speculative=True)[1] == "stage_preparation_capacity"
         for resource in ("cpu", "gpu"):
             pool.poll(("demanded", resource), resource, lambda: "ready", resource_class=resource)
@@ -262,6 +264,8 @@ def test_promote_running_build_while_peer_uses_other_worker(monkeypatch):
         pool.poll(key, "identity-1", held, speculative=True,
                   work_id="work-1", attempt_id="try-1", admission_id="admission")
         assert entered.wait(10)
+        assert pool.request_queued_ns(key, "work-1") == milestones[0][1]["request_queued_ns"]
+        assert pool.request_queued_ns(key, "work-2") is None
         assert pool.request_available_ns(key, "work-1") is None
         pool.poll(("peer", "work"), "peer", peer.set)
         assert peer.wait(10)

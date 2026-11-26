@@ -230,7 +230,7 @@ def received_idle_duration(header: str | None, elapsed: float) -> None:
 @contextmanager
 def reported_phases(
     action: str, *, operation_id: str | None = None, started_monotonic: float | None = None,
-    pending: tuple[type[Exception], ...] = (),
+    pending: tuple[type[Exception], ...] = (), always_report: bool = False,
 ) -> Iterator[PhaseTimings]:
     """Report failures, slow active work and one in 64 ordinary operations.
 
@@ -255,7 +255,7 @@ def reported_phases(
     finally:
         _current.reset(token)
         active = max(0.0, monotonic() - start - timings.idle_seconds)
-        if (qualification_timings() or timings.failed
+        if (always_report or qualification_timings() or timings.failed
             or active >= 1.0 or next(_operation_samples) % 64 == 0):
             try:
                 log_phases({

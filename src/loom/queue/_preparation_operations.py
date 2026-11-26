@@ -1991,7 +1991,7 @@ class CoordinatorPreparations:
             return False
         future = self.daemon._result_verifications.bulk.submit(
             operation_id, "preparation_target_publication", self._publish_owned_target,
-            ready, admission.run_uri,
+            ready, admission.run_uri, child_admission_id=admission.admission_id,
         )
         if future is not None:
             self._publications[operation_id] = _PendingPublication(ready, future)
@@ -2047,7 +2047,7 @@ class CoordinatorPreparations:
             else:
                 job = self.daemon._result_verifications.bulk.submit(
                     operation_id, "preparation_annotation_initialization", self._initialize_owned_context,
-                    row, prepared.run_uri, ready.config,
+                    row, prepared.run_uri, ready.config, child_admission_id=ready.child.admission_id,
                 )
                 if job is not None:
                     self._annotations[operation_id] = (ready.claim, job)
@@ -2102,7 +2102,7 @@ class CoordinatorPreparations:
             return None
         future = self.daemon._result_verifications.bulk.submit(
             operation_id, "preparation_report_hydration", self.callbacks.read_report,
-            config, admission, request, binding,
+            config, admission, request, binding, child_admission_id=admission.admission_id,
         )
         if future is not None:
             self._reports[operation_id] = (token, future)

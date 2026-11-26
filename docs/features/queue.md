@@ -178,6 +178,26 @@ unless an independently established per-clock bound is supplied with
 individual timelines when investigating the tail, since different submissions
 can contribute each phase's p95.
 
+`prequeue_wait_seconds` partitions the observed time from the opening READY
+observation to the request entering the preparation pool. For example, a wait
+for a current admission context, an existing early build, or an eligible offer
+can each postpone queuing. Time before the first scan is recorded separately.
+Reasons describe coordinator observations until its next decision. The report
+counts observed, missing, inapplicable and reused placements separately. A
+different successful build after a retry has no attributable partition from
+the earlier queue event. Per-reason distributions use only matched, observed
+placements, counting absent reasons as zero within that population.
+
+Each child handoff includes the interval from guest return to its committed
+successful admission and from that commit to the prepared target.
+`observed_preparation_work` lists the worker spans for reading the report,
+publishing the target and initializing annotations. Each row gives its UTC
+start, monotonic worker duration, outcome and any observed bulk capacity wait.
+Retries appear separately. The child admission ID identifies the child used by
+each worker. Older operators can emit sampled spans with only an operation
+ID. Missing rows then leave the work unobserved. These worker durations can
+overlap other observations and should not be added to the enclosing handoff.
+
 All dependency-ready unassigned `PENDING` attempts in the bounded window may be
 projected; they consume no `max_parallel_stages` slot. The coordinator
 assignment CAS atomically counts the run's reserved, bound, accepted, granted,
