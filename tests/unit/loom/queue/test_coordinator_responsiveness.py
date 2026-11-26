@@ -408,7 +408,7 @@ def test_cancellation_wins_while_start_authority_is_blocked(tmp_path, monkeypatc
 
 
 def test_replacement_observation_allows_renewal_but_fences_late_replay(tmp_path, monkeypatch):
-    from loom.queue import agent_sessions
+    from loom.queue import _agent_session_replacement
     from loom.queue.agent_sessions import SessionReplacementRequest
     from loom.queue.errors import QueueServiceError
     from tests.unit.loom.queue.test_agent_sessions import _config
@@ -422,14 +422,14 @@ def test_replacement_observation_allows_renewal_but_fences_late_replay(tmp_path,
     assert daemon._execution is not None
     daemon._execution.open_owner_stores()
     entered, release = Event(), Event()
-    original = agent_sessions._replacement_authority_facts
+    original = _agent_session_replacement._replacement_authority_facts
 
     def blocked(*args, **kwargs):
         entered.set()
         assert release.wait(10)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(agent_sessions, "_replacement_authority_facts", blocked)
+    monkeypatch.setattr(_agent_session_replacement, "_replacement_authority_facts", blocked)
     try:
         session = _register(daemon)
         view = _view(daemon)

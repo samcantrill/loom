@@ -20,6 +20,8 @@ from loom.pipeline.stores import (
     StoreDiagnostic,
 )
 
+from loom.pipeline.stores.authority_protocol import PREPARED_BINDING_READ_CAPABILITY
+
 from ._repository import AuthorityRepository
 from .mutation_service import AuthorityMutationService
 
@@ -182,7 +184,11 @@ def repository_authority_capabilities() -> BackendCapabilitySet:
             BackendCapabilityRecord(
                 capability=capability,
                 scope=CapabilityScope.PER_RUN,
-                detail={"service_boundary": True},
+                detail=(
+                    {"service_boundary": True, PREPARED_BINDING_READ_CAPABILITY: True}
+                    if capability is BackendCapability.FENCING_TOKENS
+                    else {"service_boundary": True}
+                ),
             )
             for capability in supported
         )

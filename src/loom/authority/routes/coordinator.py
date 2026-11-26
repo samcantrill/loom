@@ -59,6 +59,7 @@ _ROUTES = {
     "/attempts/bind": AuthorityMutationOperation.BIND_PREPARED_ATTEMPT,
     "/attempts/fail-unstarted": AuthorityMutationOperation.FAIL_PREPARED_ATTEMPT,
     "/attempts/unbind": AuthorityMutationOperation.UNBIND_PREPARED_ATTEMPT,
+    "/attempts/read-binding": AuthorityMutationOperation.READ_PREPARED_BINDING,
     "/attempts/grant": AuthorityMutationOperation.GRANT_PREPARED_ATTEMPT,
     "/attempts/start": AuthorityMutationOperation.CONFIRM_EXECUTION_STARTED,
     "/attempts/terminal": AuthorityMutationOperation.RECORD_MANAGED_TERMINAL,

@@ -77,9 +77,15 @@ def test_slurm_ack_replays_budget_outcome_before_releasing_gpu(tmp_path, monkeyp
 
     proof = {"assignment_id": assignment.assignment_id, "job_id": "123", "execution_fence": "fence-1"}
     projected = []
+    from loom.queue._slurm_bootstrap_settlement import SlurmBootstrapSettlement
+
+    projections = SimpleNamespace(acknowledge=projected.append)
     execution: Any = SimpleNamespace(
+        _bootstrap_settlement=SlurmBootstrapSettlement(
+            fixture.store, cast(Any, projections), lambda: sqlite3.connect(database), lambda _: False,
+        ),
         slurm_assignments=fixture.store,
-        slurm_submissions=SimpleNamespace(acknowledge=projected.append),
+        slurm_submissions=projections,
         _recovery_retains_assignment=lambda _: False,
         _slurm_task=lambda _: {"containment_request": proof},
         _slurm_profile=lambda *args: fixture.profile,
@@ -164,9 +170,14 @@ def test_slurm_ack_replays_budget_outcome_before_releasing_gpu(tmp_path, monkeyp
     assert record.state == "released" and record.report is None
     assert (current / "checkpoint").read_bytes() == b"complete progress"
     from loom.pipeline.status import StageStatus
-    from loom.queue.local_daemon import LocalDaemonAdmissionState
+    from loom.queue.local_daemon import LocalDaemonAdmission, LocalDaemonAdmissionState
 
-    admission = SimpleNamespace(state=LocalDaemonAdmissionState.CANCELLED, run_uri=assignment.run_uri)
+    admission = LocalDaemonAdmission(
+        admission_id="cancelled", queue_item_id="item", coordinator_id="coordinator",
+        run_uri=assignment.run_uri, intent_digest="intent", execution_owner="owner",
+        state=LocalDaemonAdmissionState.CANCELLED, accepted_at="2026-01-01T00:00:00Z",
+        authority_operation_id="admit",
+    )
     execution._daemon_owner = lambda: SimpleNamespace(_connection=connection, admission_for_run_uri=lambda _: admission)
     stage = SimpleNamespace(stage_name=assignment.stage_name, status=StageStatus.CANCELLED)
     from threading import get_ident

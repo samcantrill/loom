@@ -818,7 +818,6 @@ class AgentSlurmJobs:
                     "SELECT released, acknowledged FROM agent_slurm_operations WHERE operation_id=?", (operation,),
                 ).fetchone()
             if (released is None or released[0] or not released[1] or operation in busy
-                or task.get("release_requested") is True or task.get("compute_release_requested") is True
                 or task.get("cancel_requested") is True or task.get("recovery_request") is not None
                 or task.get("terminal_result_probe") is not None
                 or self._commands.contains(operation) or not self._retry_due("observation", operation)):
@@ -826,6 +825,11 @@ class AgentSlurmJobs:
             current = self.journal.find(operation)
             if current is None:
                 continue  # Preparation backpressure has not produced an intent.
+            if task.get("release_requested") is True or task.get("compute_release_requested") is True:
+                # A short job can finish before sacct publishes its identity.
+                # The containment proof consumes that exact identity on the next task turn.
+                if current.job_id is None or current.accounting_identity is not None:
+                    continue
             if current.state in {ReadyStageState.ACCEPTED, ReadyStageState.SUBMITTING, ReadyStageState.UNKNOWN}:
                 key = assignment.profile_id, assignment.profile_configuration_fingerprint
                 due[operation] = (task, assignment, current, key)

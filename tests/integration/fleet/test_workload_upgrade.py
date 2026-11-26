@@ -242,6 +242,9 @@ def test_workload_upgrade_native_promotion_history_versioned_selection_and_repla
         from tests.integration.fleet.test_runtime_upgrade import retry_other_failed_checks
         retry_other_failed_checks(inventory, "workload-window", keep=failed)
     if defer_checks:
+        # Polls above can record further progress for the already-issued storage
+        # check. Deferral must preserve the evidence current at its boundary.
+        attempts = read(inventory.path.parent / "operations/workload-window/checks.json")
         result = upgrades.upgrade(inventory, operation_id="workload-window", action="defer-checks",
                                   defer_agents=["worker"], defer_reason="Operator defers worker checks")
     else:

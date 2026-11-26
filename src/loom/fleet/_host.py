@@ -792,7 +792,7 @@ def main():
         "gpu-capability", "repair-gpu-policy",
         "observe", "resources", "upgrade-probe", "upgrade-settlement", "upgrade-result-recovery", "upgrade-stop",
         "upgrade-check-capture", "upgrade-check-prepare",
-        "upgrade-replace", "workload-probe", "workload-coordinator-probe", "workload-recover",
+        "upgrade-replace", "upgrade-retire-environment", "workload-probe", "workload-coordinator-probe", "workload-recover",
         "workload-stage", "workload-publish", "workload-stopped-retire",
     }:
         raise QueueConflictError("unsupported fixed native host action")

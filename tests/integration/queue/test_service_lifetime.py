@@ -9,6 +9,7 @@ import time
 import pytest
 
 import loom
+from loom._proc_stat import read_process_stat
 from loom.coordinator import RunRequest
 from loom.deployment import _bind, load_deployment
 from loom.queue.errors import QueueConflictError
@@ -216,16 +217,16 @@ def _stop_fixture_process(root: Path) -> None:
         return
     state = json.loads(row[0])
     try:
-        process = Path(f"/proc/{state['pid']}/stat").read_text().split()
-        if process[21] == state["started"] and process[2] != "Z":
+        process = read_process_stat(state["pid"])
+        if process.start_ticks == state["started"] and process.state != "Z":
             os.kill(state["pid"], signal.SIGINT)
     except FileNotFoundError:
         return
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         try:
-            process = Path(f"/proc/{state['pid']}/stat").read_text().split()
-            if process[21] != state["started"] or process[2] == "Z":
+            process = read_process_stat(state["pid"])
+            if process.start_ticks != state["started"] or process.state == "Z":
                 return
         except FileNotFoundError:
             return

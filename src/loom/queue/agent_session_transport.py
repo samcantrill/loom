@@ -7,6 +7,8 @@ or session selector from the HTTP path as transport identity.
 
 from __future__ import annotations
 
+from ._agent_assignment_control import AssignmentControlInbox, ControlledAssignment
+from ._agent_role_reload import AgentRoleReload, PreparedAgentReload
 from ._agent_transport_policy import AgentTransportPolicy, parse_transport_policy
 from .errors import _AcceptedTimeError
 from ._slurm_admission import submit_interval
@@ -43,7 +45,6 @@ from ._agent_session_journal import (
     _RemoteAgentJournal as _RemoteAgentJournal,
     _canonical_digest as _canonical_digest,
     _canonical_json,
-    _resident_profile_key,
     _agent_config_revision as _agent_config_revision,
     _agent_inventory_revision as _agent_inventory_revision,
     _record_agent_declaration_binding,
@@ -124,7 +125,6 @@ from .agent_sessions import (
     AgentStalePollError,
     AgentTransferAuthorizationStaleError,
     ScopedAuthorizer,
-    _managed_containment_evidence,
     _session_from_value,
 )
 from ._remote_stage_execution import (
@@ -179,32 +179,6 @@ _FAILURE_REPORT_OPERATIONS = frozenset(
 _HTTP_TIMEOUT_SECONDS = 10
 _ASSIGNMENT_RECONCILIATION_SECONDS = 60
 _MAX_TRANSFER_AUTHORIZATION_RENEWALS = 1_000_000
-
-
-def _supervisor_containment_evidence(
-    receipt: SupervisorReceipt, *, agent_id: str
-) -> Mapping[str, PlainData]:
-    """Serialize the exact persisted process-owner receipt without paths."""
-
-    launch = receipt.launch
-    return _managed_containment_evidence(
-        {
-            "kind": "managed_supervisor",
-            "state": "CONTAINED",
-            "supervisor_id": launch.supervisor_id,
-            "continuity_epoch": launch.continuity_epoch,
-            "agent_id": agent_id,
-            "supervisor_agent_id": launch.agent_id,
-            "session_id": launch.session_id,
-            "assignment_id": launch.assignment_id,
-            "process_execution_id": launch.process_execution_id,
-            "execution_fence": launch.execution_fence,
-            "launch_operation_id": launch.launch_operation_id,
-            "launch_spec_digest": launch.spec_digest,
-            "supervisor_revision": receipt.supervisor_revision,
-            "worker_result_digest": receipt.worker_result_digest,
-        }
-    )
 
 
 class _RunInspectionHttpError(QueueServiceError):
@@ -438,20 +412,6 @@ class AgentTlsClientConfig:
             memory_capacity_bytes=inventory.memory_capacity_bytes,
             gpu_devices=inventory.gpu_devices,
         )
-
-
-@dataclass(frozen=True, slots=True)
-class _PreparedAgentReload:
-    """One fully validated owner-local reload plan awaiting durable activation."""
-
-    replacement: AgentTlsClientConfig
-    profiles: Mapping[str, ResidentExecutionProfile]
-    retained_profiles: Mapping[str, ResidentExecutionProfile]
-    retained: bool
-    install_role: Callable[[], None]
-    config_revision: str
-    inventory_revision: str
-    active_fingerprint: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -1497,23 +1457,7 @@ class LocalDaemonAgentHttpClient:
                     return self._unchanged_control_effect(
                         control, session, "reload_rejected"
                     )
-                journal = self._require_journal()
-                journal.bind_reload_intent(control, plan.active_fingerprint)
-                effect = AgentControlEffect(
-                    operation_id=control.operation_id,
-                    code="applied",
-                    config_revision=plan.config_revision,
-                    inventory_revision=plan.inventory_revision,
-                    availability_revision=_agent_revision(
-                        "availability",
-                        {
-                            "operation_id": control.operation_id,
-                            "drained": True,
-                            "inventory_revision": plan.inventory_revision,
-                        },
-                    ),
-                )
-                journal.complete_reload(control, plan.replacement, effect)
+                effect = plan.commit(self._require_journal(), control)
                 self._config = plan.replacement
                 self._supports_event_batch = False
                 self._supports_lifecycle = False
@@ -1590,38 +1534,25 @@ class LocalDaemonAgentHttpClient:
                 availability_revision=availability_revision,
             )
 
-    def _prepare_agent_reload(self) -> _PreparedAgentReload:
-        loader = self._trusted_config_loader
-        if loader is None:
+    def _role_reload(self) -> AgentRoleReload:
+        return AgentRoleReload(
+            self._config, self._profiles, self._retained_profiles, self._slurm_agent is not None,
+        )
+
+    @staticmethod
+    def _checked_role_config(value: object) -> AgentTlsClientConfig:
+        if not isinstance(value, AgentTlsClientConfig):
+            raise QueueServiceError("trusted agent configuration is invalid")
+        return value
+
+    def _prepare_agent_reload(self) -> PreparedAgentReload:
+        if self._trusted_config_loader is None:
             raise QueueServiceError("trusted agent configuration loader is unavailable")
-        replacement = loader()
-        retained = self._has_retained_agent_work()
-        self._validate_reload_config(replacement, retained_work=retained)
-        next_profiles = {
-            item.descriptor.profile_id: item for item in replacement.resident_profiles
-        }
-        next_retained_profiles = dict(self._retained_profiles)
-        if retained:
-            next_retained_profiles.update(
-                {_resident_profile_key(item): item for item in self._profiles.values()}
-            )
-
-        def install_role() -> None:
-            return
-
-        if self._prepare_role_reload is not None:
-            install_role = self._prepare_role_reload(replacement)
-            if not callable(install_role):
-                raise QueueServiceError("trusted agent role reload plan is unavailable")
-        return _PreparedAgentReload(
-            replacement=replacement,
-            profiles=next_profiles,
-            retained_profiles=next_retained_profiles,
-            retained=retained,
-            install_role=install_role,
-            config_revision=_agent_config_revision(replacement),
-            inventory_revision=_agent_inventory_revision(replacement),
-            active_fingerprint=_agent_active_fingerprint(replacement),
+        replacement = self._checked_role_config(self._trusted_config_loader())
+        return self._role_reload().prepare(
+            replacement,
+            retained=self._has_retained_agent_work(),
+            prepare_install=self._prepare_role_reload,
         )
 
     @staticmethod
@@ -1642,69 +1573,10 @@ class LocalDaemonAgentHttpClient:
         *,
         retained_work: bool | None = None,
     ) -> None:
-        if not isinstance(replacement, AgentTlsClientConfig):
-            raise QueueServiceError("trusted agent configuration is invalid")
-        if (
-            replacement.deployment_configuration_fingerprint
-            != self._config.deployment_configuration_fingerprint
-        ):
-            raise QueueConflictError(
-                "agent reload cannot replace immutable role configuration"
-            )
-        if (
-            replacement.agent_root != self._config.agent_root
-            or replacement.url != self._config.url
-            or replacement.server_ca_path != self._config.server_ca_path
-            or replacement.certificate_path != self._config.certificate_path
-            or replacement.private_key_path != self._config.private_key_path
-        ):
-            raise QueueServiceError(
-                "agent reload cannot replace its live transport or owner root"
-            )
-        if replacement.slurm_profiles and self._slurm_agent is None:
-            raise QueueConflictError(
-                "installing SLURM submission requires fresh agent-root initialization"
-            )
-        if (
-            _resident_launch_profile_set(replacement) != _resident_launch_profile_set(self._config)
-            or replacement.container_policies != self._config.container_policies
-        ):
-            raise QueueConflictError(
-                "agent reload requires fresh agent-root initialization for "
-                "resident profile set"
-            )
+        replacement = self._checked_role_config(replacement)
         if retained_work is None:
             retained_work = self._has_retained_agent_work()
-        if (
-            retained_work
-            and _agent_active_fingerprint(replacement) != _agent_active_fingerprint(self._config)
-            and not self._slurm_transport_only_reload(replacement)
-        ):
-            raise QueueConflictError(
-                "agent reload cannot replace active configuration with retained work"
-            )
-        existing = (*self._profiles.values(), *self._retained_profiles.values())
-        for candidate in replacement.resident_profiles:
-            for retained in existing:
-                if (
-                    retained_work
-                    and retained.descriptor == candidate.descriptor
-                    and _resident_profile_key(retained)
-                    != _resident_profile_key(candidate)
-                ):
-                    raise QueueConflictError(
-                        "agent reload reuses a live profile identity for changed bindings"
-                    )
-
-    def _slurm_transport_only_reload(self, replacement: AgentTlsClientConfig) -> bool:
-        current = self._config
-        return (
-            current._transport_reload_fingerprint is not None
-            and current._transport_reload_fingerprint == replacement._transport_reload_fingerprint
-            and current.transport_policy != replacement.transport_policy
-            and tuple(profile.configuration_fingerprint for profile in current.slurm_profiles)
-            == tuple(profile.configuration_fingerprint for profile in replacement.slurm_profiles)
-        )
+        self._role_reload().validate(replacement, retained_work=retained_work)
 
     def _has_retained_agent_work(self) -> bool:
         return _has_retained_agent_work(
@@ -2139,45 +2011,26 @@ class LocalDaemonAgentHttpClient:
             return not self._service_progress or _owns_assignment(assignment_id)
 
         assignment_id = _current_assignment_id() if self._service_progress and not released_only else None
-        pending = journal.next_unacknowledged_assignment_control(assignment_id=assignment_id, owned=owned)
-        if pending is not None:
-            control, code, evidence = pending
-            if control.session_id != session_id:
-                raise QueueConflictError(
-                    "retained assignment control belongs to another session"
-                )
-            if code == "contained":
-                self._cancelled_assignments.add(control.assignment_id)
-            (yield from _steps(self._acknowledge_assignment_control, session_id, control, code, evidence))
-            return control
-        received = journal.next_received_assignment_control(assignment_id=assignment_id, owned=owned)
-        if received is None:
-            if self._service_progress or released_only:
-                return None
-            result = (yield from _steps(self._call, "assignment_control", {"session_id": session_id}))
-            raw = result.get("control")
-        else:
-            raw = received.value()
+        inbox = AssignmentControlInbox(journal, self._received_cancellations, self._cancelled_assignments)
+        return (yield from inbox.poll(
+            session_id,
+            assignment_id=assignment_id,
+            owned=owned,
+            fetch=None if self._service_progress or released_only else self._fetch_assignment_control,
+            apply=self._apply_assignment_control,
+            acknowledge=self._acknowledge_assignment_control,
+        ))
+
+    def _fetch_assignment_control(
+        self, session_id: str,
+    ) -> Generator[_Progress, Any, AgentAssignmentControl | None]:
+        result = yield from _steps(self._call, "assignment_control", {"session_id": session_id})
+        raw = result.get("control")
         if raw is None:
             return None
         if not isinstance(raw, Mapping):
             raise QueueServiceError("assignment control response is invalid")
-        control = AgentAssignmentControl.from_value(raw)
-        if control.session_id != session_id:
-            raise QueueConflictError("retained assignment control belongs to another session")
-        self._received_cancellations.add(control.assignment_id)
-        if not owned(control.assignment_id):
-            journal.prepare_assignment_control(control)
-            return None
-        prior = journal.prepare_assignment_control(control)
-        if prior is not None:
-            code, evidence = prior
-            (yield from _steps(self._acknowledge_assignment_control, session_id, control, code, evidence))
-            return control
-        code, evidence = (yield from _steps(self._apply_assignment_control, control))
-        journal.record_assignment_control_result(control, code, evidence)
-        (yield from _steps(self._acknowledge_assignment_control, session_id, control, code, evidence))
-        return control
+        return AgentAssignmentControl.from_value(raw)
 
     @_cooperative
     def _acknowledge_assignment_control(
@@ -2214,69 +2067,15 @@ class LocalDaemonAgentHttpClient:
             journal = self._execution_journal
             if journal is None:
                 return "unknown", None
-            workspace = self._assignment_workspace(control.assignment_id)
-            raw = self._require_journal().delivery_request(control.session_id, control.assignment_id)
-            from ._shared_assignment import reference
-            if (not workspace.has_request() and reference(raw) is not None
-                and control.fence is None and journal.find_state(control.assignment_id) is None):
-                return "never_started", None
-            try:
-                state = journal.read_state(control.assignment_id)
-                fence = journal.read_grant_fence(control.assignment_id)
-            except Exception:
-                return "unknown", None
-            if control.fence != fence:
-                return "unknown", None
-            workspace = self._assignment_workspace(control.assignment_id)
-            encoded_launch = workspace.supervisor_launch_json()
-            if encoded_launch is None:
-                if state in {
-                    AssignmentState.RESULT_DURABLE,
-                    AssignmentState.TERMINAL_ACKNOWLEDGED,
-                    AssignmentState.PROVIDERS_RELEASED,
-                    AssignmentState.RELEASED,
-                }:
-                    result = journal.read_result(control.assignment_id)
-                    if result is not None and result.status is StageStatus.CANCELLED:
-                        # With no persisted launch, this result can only come
-                        # from the native ACTIVE/no-start cancellation transition.
-                        return "never_started", None
-                    return "terminal", None
-                if state in {
-                    AssignmentState.REQUEST_DURABLE,
-                    AssignmentState.PREPARED,
-                    AssignmentState.ACCEPTED,
-                    AssignmentState.GRANTED,
-                    AssignmentState.ACTIVE,
-                }:
-                    return "never_started", None
-                return "unknown", None
-            if control.process_execution_id not in {
-                None,
-                f"{control.assignment_id}:root",
-            }:
-                return "unknown", None
-            if self._supervisor is None:
-                return "unknown", None
-            try:
-                launch = _launch_from_value(json.loads(encoded_launch))
-                if (
-                    launch.assignment_id != control.assignment_id
-                    or launch.session_id != control.session_id
-                    or (
-                        control.process_execution_id is not None
-                        and launch.process_execution_id != control.process_execution_id
-                    )
-                    or launch.execution_fence != control.fence
-                ):
-                    return "unknown", None
-                if state is AssignmentState.RELEASED:
-                    # Release already proved containment and returned claims.
-                    # A late command cannot change its committed result.
-                    return "terminal", None
-            except (AgentProcessSupervisorError, QueueError, ValueError):
-                return "unknown", None
-            supervisor = self._supervisor
+            target = ControlledAssignment(
+                self._require_journal(), journal, self._assignment_workspace(control.assignment_id), self._supervisor,
+            )
+            prepared = target.prepare(control)
+            if isinstance(prepared, str):
+                return prepared, None
+            launch, encoded = prepared
+            supervisor = target.supervisor
+            assert supervisor is not None
         try:
             yield from _steps(supervisor.request_stop_wait, launch, checkpoint=self._control_checkpoint)
             contained = yield from _steps(supervisor.contain, launch, checkpoint=self._control_checkpoint)
@@ -2285,20 +2084,11 @@ class LocalDaemonAgentHttpClient:
         except (AgentProcessSupervisorError, QueueError, ValueError):
             return "unknown", None
         with self._control_lock:
-            if (contained.launch != launch or workspace.supervisor_launch_json() != encoded_launch
-                    or journal.read_grant_fence(control.assignment_id) != control.fence):
-                return "unknown", None
-            self._observe_supervisor_ownership(contained)
-            if contained.state is not SupervisorLaunchState.CONTAINED:
-                return "unknown", None
-            if journal.read_state(control.assignment_id) is AssignmentState.RELEASED:
-                return "terminal", None
-            self._record_contained_cancellation(workspace)
-            target_agent_id = self._runtime_agent_id
-            if target_agent_id is None:
-                return "unknown", None
-            return "contained", _supervisor_containment_evidence(
-                contained, agent_id=target_agent_id
+            return target.finish(
+                control, launch, contained, encoded,
+                observe=self._observe_supervisor_ownership,
+                record_cancellation=self._record_contained_cancellation,
+                agent_id=self._runtime_agent_id,
             )
 
     @_cooperative
@@ -3297,6 +3087,7 @@ class LocalDaemonAgentHttpClient:
                 raise _IndeterminateAgentProtocolError("assignment exchange deadline expired")
             yield from _delay(0.01)
         operation_id, assignment_id = value.get("operation_id"), value.get("assignment_id")
+        identity = request_identity(value)
         body = json.dumps(
             value, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
@@ -3321,7 +3112,7 @@ class LocalDaemonAgentHttpClient:
                     wait_options["lifecycle"] = True
                 reply = yield from _external(
                     lane,
-                    _timed_agent_exchange, monotonic(), utc_timestamp(), request_identity(value),
+                    _timed_agent_exchange, monotonic(), utc_timestamp(), identity,
                     self._config, operation, body, role, connection,
                     not self._service_progress, _queue_deadline=exchange_deadline,
                     exchange_deadline=exchange_deadline, **wait_options,
@@ -4821,26 +4612,6 @@ def _dispatch_application(
             )
             return {"state": "released"}
     raise QueueServiceError("daemon protocol operation is unsupported")
-
-
-def _resident_launch_profile_set(
-    config: AgentTlsClientConfig,
-) -> tuple[tuple[str, str], ...]:
-    """Canonical executable bindings held by the initialized supervisor.
-
-    Capacity is intentionally absent: it contributes to provider inventory, not
-    the protected worker executable, descriptor, or project binding.
-    """
-
-    return tuple(
-        sorted(
-            (
-                profile.descriptor.profile_id,
-                profile.launch_profile.fingerprint,
-            )
-            for profile in config.resident_profiles
-        )
-    )
 
 
 def _agent_provider_composition_key(

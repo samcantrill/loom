@@ -18,6 +18,24 @@ uv run loom --help
 is not a workspace member in this repository; it is resolved through the Git
 source declared in `pyproject.toml` and pinned in `uv.lock`.
 
+## Installing a checkout with pip
+
+Run these commands in the Loom checkout with a Python 3.12 virtual environment
+activated. Read the Weave Git URL and revision from the same source used by uv.
+
+```sh
+weave_requirement=$(python - <<'PY'
+import tomllib
+from pathlib import Path
+
+with Path("pyproject.toml").open("rb") as stream:
+    weave = tomllib.load(stream)["tool"]["uv"]["sources"]["weave"]
+print(f"weave @ git+{weave['git']}@{weave['rev']}")
+PY
+)
+python -m pip install "$weave_requirement" -e '.[config]'
+```
+
 ## Downstream uv Dependency
 
 For a downstream project that needs Loom for experiment execution, workflows,

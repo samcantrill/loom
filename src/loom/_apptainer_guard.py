@@ -18,9 +18,11 @@ from typing import Sequence
 from loom._bounded_process import ProcessOutputLimitError, run_bounded_process
 
 
-VERSION = "loom-apptainer-guard version 1"
-_RUNTIME_VERSION = "apptainer version 1.5.3"
-_UNSHARE_VERSION = "unshare from util-linux 2.37.4"
+from loom._container_timeout_support import (
+    GUARD_RUNTIME as _RUNTIME_VERSION,
+    GUARD_UNSHARE as _UNSHARE_VERSION,
+    GUARD_VERSION as VERSION,
+)
 
 
 class _GuardError(RuntimeError):

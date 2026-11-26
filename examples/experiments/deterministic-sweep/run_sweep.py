@@ -105,7 +105,8 @@ def main() -> None:
 
 
 def _result(argv: list[str]) -> dict[str, object]:
-    return require_mapping(run_cli_json(argv)["result"])
+    # Execution writes process timing diagnostics alongside the JSON result.
+    return require_mapping(run_cli_json(argv, allow_stderr=argv[:2] == ["sweep", "run"])["result"])
 
 
 def _required_int(mapping: dict[str, object], key: str) -> int:

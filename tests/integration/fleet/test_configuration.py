@@ -457,9 +457,9 @@ def test_native_observations_keep_identity_freshness_and_failure_codes(
         CoordinatorOperatorClient,
         "from_connection_file",
         classmethod(
-            lambda cls, path: CoordinatorOperatorClient.from_unix_socket(
+            lambda cls, path, *, expected_coordinator_id: CoordinatorOperatorClient.from_unix_socket(
                 daemon.config.endpoint,
-                expected_coordinator_id=daemon.status().coordinator_id,
+                expected_coordinator_id=expected_coordinator_id,
             )
         ),
     )

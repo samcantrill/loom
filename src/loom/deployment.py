@@ -19,6 +19,7 @@ import sys
 import time
 from typing import Any, cast
 
+from loom._proc_stat import read_process_stat
 from loom.coordinator import CoordinatorClient, CoordinatorClientError
 from loom.queue.deployment import (
     _load_protected_config,
@@ -620,8 +621,8 @@ def ensure_available(
                 and state.get("session_id")
             ):
                 try:
-                    process = Path(f"/proc/{state['pid']}/stat").read_text().split()
-                    live = process[21] == state["started"] and process[2] != "Z"
+                    process = read_process_stat(state["pid"])
+                    live = process.start_ticks == state["started"] and process.state != "Z"
                 except FileNotFoundError:
                     live = False
                 if live:

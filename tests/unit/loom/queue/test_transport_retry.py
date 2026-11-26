@@ -39,7 +39,8 @@ def test_indeterminate_retries_keep_exact_bytes_and_bound_work(client, monkeypat
     progress = _steps(client._call, operation, request)
     step = next(progress)
     assert isinstance(step, _External)
-    original_args = step.args
+    # The first two values timestamp each attempt. Identity and wire bytes are retained.
+    original_request = step.args[2:]
     try:
         for attempt in range(10):
             # A lost reply must never regenerate or reread this request.
@@ -51,7 +52,7 @@ def test_indeterminate_retries_keep_exact_bytes_and_bound_work(client, monkeypat
             clock[0] = delay.due
             step = next(progress)
             assert isinstance(step, _External)
-            assert step.args == original_args
+            assert step.args[2:] == original_request
         assert "private request contents" not in caplog.text
         assert "not-the-retained-operation" not in caplog.text
         assert "agent transport recovery pending" in caplog.text
@@ -64,7 +65,7 @@ def test_indeterminate_retries_keep_exact_bytes_and_bound_work(client, monkeypat
 
 
 @pytest.mark.parametrize("operation", [
-    "renew", "offer", "control", "assignment_control", "control_wait",
+    "offer", "control", "assignment_control", "control_wait",
     "control_ack", "assignment_control_ack",
 ])
 def test_maintenance_and_controls_keep_their_existing_retry_cadence(client, monkeypatch, operation):
@@ -79,6 +80,15 @@ def test_maintenance_and_controls_keep_their_existing_retry_cadence(client, monk
             assert isinstance(next(progress), _External)
     finally:
         progress.close()
+
+
+def test_indeterminate_renewal_returns_to_resource_maintenance(client):
+    progress = _steps(client._call, "renew", {"session_id": "session-A"})
+    assert isinstance(next(progress), _External)
+    failure = _IndeterminateAgentProtocolError("lost renewal reply")
+    with pytest.raises(_IndeterminateAgentProtocolError) as caught:
+        progress.throw(failure)
+    assert caught.value is failure
 
 
 def test_suspension_during_retry_does_not_dispatch_another_request(client):

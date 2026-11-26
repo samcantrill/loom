@@ -6,15 +6,15 @@ accept new work, select placement, own processes or replace per-run authority.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-from .errors import QueueConflictError
+from .errors import QueueConflictError, QueueServiceError
 
 if TYPE_CHECKING:
     from loom.artifacts import ArtifactRef
     from loom.pipeline.status import RunStatus, StageStatus
     from loom.pipeline.stores import CancellationEpochRequest
-    from loom.pipeline.stores.authority import ExecutionFence, PreparedAttemptRequest, StatusTransition
+    from loom.pipeline.stores.authority import ExecutionFence, PreparedAttemptRequest, PreparedBindingObservation, PreparedBindingReader, StatusTransition
     from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot, LifecycleReason
     from .coordinator_authority import CoordinatorAuthorityStore
     from ._lifecycle_observers import LifecycleObservers
@@ -115,6 +115,17 @@ class _ScopedCoordinatorAuthority:
         return self._store.fail_prepared_attempt(
             run_uri, assignment_id=assignment_id, attempt_id=attempt_id, reason=reason,
         )
+
+    def read_prepared_binding(
+        self, run_uri: str, *, assignment_id: str, attempt_id: str
+    ) -> PreparedBindingObservation:
+        self._run(run_uri)
+        reader = cast("PreparedBindingReader", self._store)
+        # Observer adapters forward optional operations through __getattr__.
+        # Resolve this capability only when Slurm needs the exact receipt.
+        if not callable(getattr(reader, "read_prepared_binding", None)):
+            raise QueueServiceError("SLURM recovery requires authority prepared binding reads")
+        return reader.read_prepared_binding(run_uri, assignment_id=assignment_id, attempt_id=attempt_id)
 
     def grant_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str

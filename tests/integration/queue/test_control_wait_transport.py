@@ -9,8 +9,8 @@ import pytest
 from loom.queue import LocalDaemonPrincipal, LocalDaemonRole
 from loom.queue.agent_session_transport import AgentTlsClientConfig, LocalDaemonAgentHttpClient
 from loom.queue.errors import QueueServiceError
-from tests.integration.queue.test_agent_session_transport import _request
-from tests.integration.queue.test_agent_session_transport import native_control_endpoint as native_control_endpoint
+from tests.support.agent_sessions import _request
+from tests.support.agent_sessions import native_control_endpoint as native_control_endpoint
 from tests.unit.loom.queue.test_agent_sessions import _offer, _TEST_RETIREMENT_VERIFIER
 from tests.unit.loom.queue.test_agent_waiting import _observe_sleep
 

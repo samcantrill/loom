@@ -120,6 +120,7 @@ def test_resident_candidates_and_slurm_submit_selection_follow_negotiated_suppor
     execution.coordinator_epoch = "epoch"
     execution.agent_id = None
     execution._slurm_agent = None
+    execution._full_offer_hosts = set()
     slurm = cast(SlurmReadyStageProfile, SimpleNamespace(profile_id=pair[0], configuration_fingerprint=pair[1]))
     for capable in (False, True):
         capabilities = [SHARED_EXECUTION_CAPABILITY, CAPABILITY]

@@ -442,7 +442,8 @@ def test_busy_gpu_deadline_preserves_cpu_storage_progress(tmp_path, monkeypatch)
     observed = []
     monkeypatch.setattr(checks_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
 
-    def observe(client, operator, path, retained_intent, check, deadline, *, wait):
+    def observe(client, operator, path, retained_intent, check, deadline, *, wait, collect, native_result_observed_at):
+        assert collect is None and native_result_observed_at is None
         assert deadline == 110.0
         assert wait is True
         assert retained_intent["requests"] == requests
@@ -562,7 +563,9 @@ def test_storage_deadline_does_not_prevent_gpu_dispatch(tmp_path, monkeypatch):
         observe_assignment=lambda identity, **kwargs: SimpleNamespace(
             availability="available", value=assignment, to_dict=lambda: {"value": assignment}
         ),
-        observe_agent=lambda identity, **kwargs: SimpleNamespace(value={}, to_dict=lambda: {}),
+        observe_agent=lambda identity, **kwargs: SimpleNamespace(
+            availability="available", freshness="current", value={}, to_dict=lambda: {},
+        ),
         select_outputs=lambda selection, **kwargs: SimpleNamespace(
             items=[{"locator": {"run_uri": "file:///run/" + current[0]}, "artifact": {"metadata": {"loom.shared_publication": {}}}}],
             next_cursor=None,
@@ -1057,8 +1060,8 @@ def test_selected_gpu_intent_keeps_host_policy_separate_from_preparation(fleet, 
     inventory = replace(inventory, gpu_qualification="nonexclusive")
     observe = CoordinatorOperatorClient.observe_agent
 
-    def with_gpu(client, name):
-        observation = observe(client, name)
+    def with_gpu(client, name, *, deadline=None):
+        observation = observe(client, name, deadline=deadline)
         value = cast(dict[str, Any], thaw_plain_data(observation.value))
         value["offer"]["gpu_devices"] = [{"device_id": "GPU-18cf22d0-ba80-55a5-f8d8-cb19fe940cd1"}]
         return replace(observation, value=value)

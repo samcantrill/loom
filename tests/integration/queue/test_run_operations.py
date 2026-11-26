@@ -506,7 +506,7 @@ def test_run_identity_ownership_and_projection_refusal_before_effects(tmp_path):
 
 def test_failed_run_replay_never_authorizes_retry(tmp_path, monkeypatch):
     from loom.pipeline.stores.sqlite_authority import SQLitePerRunAuthorityStore
-    from tests.support.lifecycle_observers import captured_events, selected_capture
+    from tests.support.lifecycle_observers import captured_events, selected_capture, wait_for_callbacks
 
     service = _two_stage_service(tmp_path, failing=True)
     observed = tmp_path / "observer.jsonl"
@@ -525,6 +525,7 @@ def test_failed_run_replay_never_authorizes_retry(tmp_path, monkeypatch):
         failed = daemon._wait("target-admission", timeout_seconds=25)
         assert failed.state.value == "FAILED"
         authority = SQLitePerRunAuthorityStore(failed.run_uri)
+        wait_for_callbacks(daemon)
         failed_events = authority.list_audit_events(failed.run_uri)
         assert sum(event.event_type == "run.failed" for event in failed_events) == 1
         observed_before_replay = observed.read_bytes()
@@ -551,6 +552,7 @@ def test_failed_run_replay_never_authorizes_retry(tmp_path, monkeypatch):
         assert (
             daemon._wait("target-admission", timeout_seconds=25).state.value == "FAILED"
         )
+        wait_for_callbacks(daemon)
         retried_events = authority.list_audit_events(failed.run_uri)
         assert retried_events[:len(failed_events)] == failed_events
         kinds = [event.event_type for event in retried_events]

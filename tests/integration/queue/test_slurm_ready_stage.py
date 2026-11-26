@@ -501,6 +501,7 @@ def _exercise_mixed_route_run(
     held_retry_boundary: str | None = None,
     prestart_failure: bool = False,
     bootstrap_failure: str | None = None,
+    grant_boundary: str | None = None,
     replayable_start: bool = False,
     recovery_terminal_state: str | None = None,
     native_failure: bool = False,
@@ -960,6 +961,107 @@ def _exercise_mixed_route_run(
                 capability=base64.b64encode(b"different-capability-material").decode(),
             )
         assignment_id = cast(str, registration["assignment_id"])
+        if grant_boundary is not None:
+            assert view.inputs_ready(assignment_id, incarnation)
+            store_grant = SQLitePerRunAuthorityStore.grant_prepared_attempt
+            fences = []
+            committed, resume = Event(), Event()
+
+            def intercepted(store, uri, **scope):
+                granted = store_grant(store, uri, **scope)
+                if scope["assignment_id"] == assignment_id:
+                    fences.append(granted.fencing_token)
+                    if grant_boundary in {"lost", "blocked_read"}:
+                        raise ConnectionError("grant response lost after commit")
+                    committed.set()
+                    assert resume.wait(15)
+                return granted
+
+            with monkeypatch.context() as patch:
+                patch.setattr(SQLitePerRunAuthorityStore, "grant_prepared_attempt", intercepted)
+                if grant_boundary in {"lost", "blocked_read"}:
+                    from loom.pipeline.stores import AuthorityStoreError
+
+                    read_binding = SQLitePerRunAuthorityStore.read_prepared_binding
+
+                    def disconnected(store, uri, **scope):
+                        if scope["assignment_id"] == assignment_id:
+                            raise AuthorityStoreError("grant receipt unavailable until restart")
+                        return read_binding(store, uri, **scope)
+
+                    patch.setattr(SQLitePerRunAuthorityStore, "read_prepared_binding", disconnected)
+                    with daemon._cycle_lock, pytest.raises(ConnectionError, match="grant response lost"):
+                        view.grant(assignment_id, incarnation)
+                    daemon.stop()
+                    assert execution.slurm_assignments.read(assignment_id).fence is None
+                else:
+                    peer_uri = _persist_rejected_slurm_run(run_root, profile)
+                    with ThreadPoolExecutor(max_workers=2) as workers:
+                        pending = workers.submit(view.grant, assignment_id, incarnation)
+                        try:
+                            assert committed.wait(10)
+                            workers.submit(client.submit, LocalDaemonAdmissionRequest("peer", peer_uri)).result(5)
+                            assert workers.submit(client.cancel, "peer").result(5).cancellation_operation_id
+                            assert workers.submit(client.cancel, "mixed-route").result(5).cancellation_operation_id
+                            with daemon._connection() as conn:
+                                assert conn.execute(
+                                    "SELECT cancellation_operation_id FROM managed_admissions WHERE run_uri=?",
+                                    (peer_uri,),
+                                ).fetchone()[0]
+                        finally:
+                            resume.set()
+                        assert pending.result(5) == fences[0]
+                    assert not view.start_permit(assignment_id, incarnation, fences[0])
+                    assert not execution.slurm_assignments.read(assignment_id).start_consumed
+                    return
+            daemon = LocalDaemon(reopened_config, clock=clock)
+            entered_read, finish_read = Event(), Event()
+            if grant_boundary == "blocked_read":
+                from loom.pipeline.stores import AuthorityStoreError
+
+                store_read = SQLitePerRunAuthorityStore.read_prepared_binding
+                failed = Event()
+
+                def delayed_read(store, uri, **scope):
+                    if scope["assignment_id"] == assignment_id:
+                        if not failed.is_set():
+                            failed.set()
+                            raise AuthorityStoreError("temporary authority outage")
+                        entered_read.set()
+                        assert finish_read.wait(25)
+                    return store_read(store, uri, **scope)
+
+                monkeypatch.setattr(SQLitePerRunAuthorityStore, "read_prepared_binding", delayed_read)
+            daemon.start()
+            execution = daemon._execution
+            assert execution is not None
+            if grant_boundary == "blocked_read":
+                try:
+                    from tests.integration.queue.test_local_daemon_production import _persist_single_stage_run
+
+                    assert entered_read.wait(12), daemon.status()
+                    _, peer_uri, _ = _persist_single_stage_run(run_root)
+                    peer_authority = SQLitePerRunAuthorityStore(peer_uri)
+                    peer_authority.create_run(peer_uri, status=RunStatus.RUNNING)
+                    assert execution.slurm_assignments.read(assignment_id).state == "accepted"
+                    peer = daemon.client_view(LocalDaemonPrincipal("client", LocalDaemonRole.CLIENT))
+                    peer.submit(LocalDaemonAdmissionRequest("peer", peer_uri))
+                    deadline = time.monotonic() + 12
+                    while peer_authority.open_run(peer_uri).status is not RunStatus.SUCCEEDED:
+                        assert time.monotonic() < deadline, daemon.status()
+                        time.sleep(.02)
+                    assert execution.slurm_assignments.read(assignment_id).fence is None
+                finally:
+                    finish_read.set()
+            deadline = time.monotonic() + 15
+            restored = execution.slurm_assignments.read(assignment_id)
+            while restored.fence is None:
+                assert time.monotonic() < deadline, daemon.status()
+                time.sleep(.02)
+                restored = execution.slurm_assignments.read(assignment_id)
+            assert fences == [restored.fence]
+            assert restored.state == "granted" and not restored.start_consumed
+            return
         if bootstrap_failure is not None:
             scoped = execution._remote_authority(run_uri)
             record_retry = type(execution)._record_bootstrap_retry
@@ -996,7 +1098,7 @@ def _exercise_mixed_route_run(
                     return
                 if bootstrap_failure == "cancelling":
                     with monkeypatch.context() as patch:
-                        patch.setattr("loom.queue.local_daemon_execution.action_attempt_cancelled", lambda *args: True)
+                        patch.setattr("loom.queue._slurm_bootstrap_settlement.action_attempt_cancelled", lambda *args: True)
                         assert not execution._claim_failed_slurm_bootstrap(current, scoped)
                     assert execution.slurm_assignments.read(assignment_id).state == "accepted"
                     return
@@ -1008,6 +1110,18 @@ def _exercise_mixed_route_run(
                         patch.setattr(execution.slurm_assignments, "claim_failed_bootstrap", interrupt)
                         with pytest.raises(OSError, match="projection lost"):
                             execution._claim_failed_slurm_bootstrap(current, scoped)
+                    # An observation of another incarnation of the same numeric
+                    # job must not project this failure or free its reserved slot.
+                    submission = execution.slurm_submissions.read(record.assignment.operation_id)
+                    assert submission.accounting_identity is not None
+                    different_job = replace(
+                        submission, accounting_identity=replace(submission.accounting_identity, sluid="sOther1200"),
+                    )
+                    with monkeypatch.context() as patch:
+                        patch.setattr(execution.slurm_submissions, "find", lambda _: different_job)
+                        assert not execution._claim_failed_slurm_bootstrap(current, scoped)
+                        retained = execution.slurm_assignments.read(assignment_id)
+                        assert retained.state == "accepted" and retained.compute_released_at is None
                 else:
                     assert execution._claim_failed_slurm_bootstrap(current, scoped)
                     with pytest.raises(QueueConflictError, match="already failed"):
@@ -1099,6 +1213,9 @@ def _exercise_mixed_route_run(
             {"assignment_id": assignment_id, "incarnation": incarnation},
         ) == {"state": "input_ready"}
         fence = view.grant(assignment_id, incarnation)
+        with pytest.raises(QueueConflictError, match="permitted fence"):
+            view.started(assignment_id, incarnation, fence, "premature-process")
+        assert not execution.slurm_assignments.read(assignment_id).start_consumed
         if replayable_start:
             assert "slurm-replayable-start-v1" in cast(list[str], view.handshake()["capabilities"])
             payload = dict(assignment_id=assignment_id, incarnation=incarnation, fence=fence, request_id="live-process")
@@ -1139,6 +1256,13 @@ def _exercise_mixed_route_run(
             execution = daemon._execution
             assert execution is not None
             assert execution.slurm_assignments.read(assignment_id).process_execution_id is None
+        if automatic_recovery or (guarded_recovery and accounting_history):
+            # The bootstrap permit can arrive before the asynchronous scheduler
+            # has published the exact accounting incarnation used for recovery.
+            deadline = time.monotonic() + 25
+            while execution.slurm_submissions.read(record.assignment.operation_id).accounting_identity is None:
+                assert time.monotonic() < deadline, daemon.status()
+                time.sleep(.01)
         if automatic_recovery:
             import loom.queue._agent_slurm as agent_module
             from loom.pipeline.executors.slurm.ready_stage import SlurmContainmentReceipt
@@ -1317,14 +1441,6 @@ def _exercise_mixed_route_run(
             return
         recovery_receipt = None
         if guarded_recovery:
-            if accounting_history:
-                # The asynchronous scheduler must establish the exact accounting
-                # incarnation before injected terminal evidence can authorize
-                # recovery. A bootstrap grant alone does not establish it.
-                deadline = time.monotonic() + 15
-                while execution.slurm_submissions.read(record.assignment.operation_id).accounting_identity is None:
-                    assert time.monotonic() < deadline, daemon.status()
-                    time.sleep(.01)
             before_recovery = authority.open_run(run_uri)
             train = next(
                 item for item in before_recovery.stages if item.stage_name == "train"
@@ -2067,6 +2183,7 @@ def _exercise_slow_retry_validation(daemon, client, run_uri, monkeypatch, bounda
                                       False if request.recovery_id == recovery_ids[0] else resume(owner, execution, request, row))
             release.set()
             deadline = time.monotonic() + 45
+            rows = []
             while time.monotonic() < deadline:
                 with daemon._connection() as conn:
                     rows = conn.execute("SELECT recovery_id, state FROM recovery_operations").fetchall()
@@ -2078,6 +2195,7 @@ def _exercise_slow_retry_validation(daemon, client, run_uri, monkeypatch, bounda
         daemon.start()
         assert daemon.start_run(requested, principal_id="caller").operation_id == accepted.operation_id
         deadline = time.monotonic() + 30
+        rows = []
         while time.monotonic() < deadline:
             with daemon._connection() as conn:
                 rows = conn.execute("SELECT recovery_id, state FROM recovery_operations").fetchall()
@@ -3242,3 +3360,7 @@ def test_failed_registered_job_before_grant(tmp_path, monkeypatch, boundary):
         tmp_path, monkeypatch, accounting_history=True, automatic_recovery=True,
         bootstrap_failure=boundary,
     )
+
+@pytest.mark.parametrize("boundary", ["paused", "lost", "blocked_read"])
+def test_grant_allows_peer_cancellation_and_recovers_without_worker(tmp_path, monkeypatch, boundary):
+    _exercise_mixed_route_run(tmp_path, monkeypatch, grant_boundary=boundary)

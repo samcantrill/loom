@@ -72,10 +72,10 @@ def preview(
         name: row
         for name, row in plan["hosts"].items()
         if name != "coordinator"
-        and plan["declarations"][name]["resident_profiles"][0]["descriptor"][
-            "profile_id"
-        ]
-        == workload_profile
+        and any(
+            profile["descriptor"]["profile_id"] == workload_profile
+            for profile in plan["declarations"][name]["resident_profiles"]
+        )
     }
     if not consumers:
         raise QueueConfigError("selected workload profile has no consuming agents")

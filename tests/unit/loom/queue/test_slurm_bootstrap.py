@@ -189,6 +189,9 @@ def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files,
     config_path.chmod(0o600)
     config = SlurmBootstrapClientConfig.from_file(config_path)
     config = replace(config, bootstrap_deadline_seconds=3, reconnect_seconds=1, durable_files=durable_files)
+    from loom.pipeline.execution.models import StageWorkerResult
+    from loom.pipeline.status import StageStatus
+
     captured: dict[str, object] = {}
     actions: list[str] = []
     now = [10.0]
@@ -300,8 +303,8 @@ def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files,
         slurm_bootstrap.SlurmStageDelivery,
         "from_dict",
         lambda _value: SimpleNamespace(
-            assignment_id="assignment-1",
-            profile_id="training",
+            assignment_id="assignment-1", stage_work_id="work-1", stage_name="train",
+            attempt_id="attempt-1", attempt=1, profile_id="training",
             project_fingerprint="project-v1",
             environment_fingerprint="environment-v1",
             executor_fingerprint="executor-v1",
@@ -329,11 +332,15 @@ def _exercise_bootstrap(tmp_path, monkeypatch, pending_responses, durable_files,
         FakeWorkspace, "output_chunk", lambda *_args: (b"", True), raising=False
     )
     monkeypatch.setattr(slurm_bootstrap, "SlurmBootstrapWorkspace", FakeWorkspace)
-    monkeypatch.setattr(
-        slurm_bootstrap,
-        "execute_resident_stage_worker_request",
-        lambda **kwargs: captured.update(kwargs) or object(),
-    )
+    def execute_worker(**kwargs):
+        captured.update(kwargs)
+        return StageWorkerResult(
+            schema_version=1, run_uri="file:///runs/train", stage_name="train", attempt=1,
+            status=StageStatus.SUCCEEDED, started_at="2026-11-26T00:00:00Z",
+            finished_at="2026-11-26T00:00:01Z", executor_name="local",
+        )
+
+    monkeypatch.setattr(slurm_bootstrap, "execute_resident_stage_worker_request", execute_worker)
 
     if continuing and not coordinator_support:
         with pytest.raises(QueueServiceError, match="coordinator lacks released-output-staging-v1"):

@@ -139,7 +139,7 @@ class ProbeStage:
         }
 
 
-def probe_configuration(check: str, agent_id: str) -> dict[str, Any]:
+def probe_configuration(check: str, agent_id: str, *, slurm_profile: str | None = None) -> dict[str, Any]:
     """Compose fixed probe intent for native capture and placement on one agent."""
     if check not in {"cpu", "storage", "gpu"}:
         raise ValueError("unknown infrastructure check")
@@ -159,7 +159,8 @@ def probe_configuration(check: str, agent_id: str) -> dict[str, Any]:
                     "name": "probe",
                     "factory": {"_target_": "loom.fleet.probes.ProbeStage"},
                     "config": {"check": check},
-                    "placement": {"target": agent_id},
+                    "placement": ({"target": agent_id} if slurm_profile is None else
+                                  {"execution_route": {"kind": "slurm", "profile": slurm_profile}}),
                     "resources": {"entries": resources},
                     "outputs": {
                         "report": {"artifact_type": "json", "codec_key": "json.v1"}

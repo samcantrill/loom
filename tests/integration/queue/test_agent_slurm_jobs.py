@@ -43,6 +43,7 @@ from loom.queue.deployment import (
     OutboundAgentRegistrationConfig,
     OutboundAgentServiceConfig,
 )
+from tests.support.agent_sessions import restart_daemon
 from tests.support.mutual_tls import mutual_tls_credentials, certificate_fingerprint
 from tests.integration.queue.test_slurm_ready_stage import (
     _profile,
@@ -339,8 +340,7 @@ def test_outbound_service_settles_slurm_while_drained(
                 with pytest.raises(QueueConflictError, match="retained"):
                     agent.shutdown_clean()
             # Exercise session epoch recovery before the serial driver too.
-            daemon.stop()
-            daemon.start(start_held=start_held)
+            restart_daemon(daemon, start_held=start_held)
             execution = _execution(daemon)
         thread.start()
         if not restart_with_job:
@@ -684,8 +684,7 @@ def test_two_authenticated_submit_agents_share_quota_and_recover_cancel(tmp_path
         for joint in (False, True):
             if joint:
                 agents[0].close()
-            daemon.stop()
-            daemon.start()
+            restart_daemon(daemon)
             execution = _execution(daemon)
             if joint:
                 agents[0] = LocalDaemonAgentHttpClient(configs[0])

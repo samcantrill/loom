@@ -58,6 +58,9 @@ def _ssh(host, request, *, deadline=None):
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", host) is None:
         raise QueueConfigError("select a plain configured SSH alias, never SSH options")
     program = Path(__file__).with_name("_ssh_bootstrap.py").read_text()
+    command = ["python3.12", "-c", program]
+    if request.get("inspect_slurm") and request.get("action") == "inspect":
+        command.append(Path(__file__).with_name("_slurm_upgrade.py").read_text())
     encoded = json.dumps(request, sort_keys=True).encode()
     if len(encoded) > 128 * 1024 * 1024:
         raise QueueConfigError("selected bundle exceeds the fixed host request limit")
@@ -75,7 +78,7 @@ def _ssh(host, request, *, deadline=None):
                 "ConnectTimeout=10",
                 "--",
                 host,
-                shlex.join(["python3.12", "-c", program]),
+                shlex.join(command),
             ],
             input=encoded,
             capture_output=True,
@@ -131,7 +134,7 @@ def _file_hash(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def _selection(inventory, hosts, env_file):
+def _selection(inventory, hosts, env_file, *, runtime_upgrade=False):
     environments = _environment_files(inventory, env_file)
     selected = inventory.select(hosts)
     names = [entry.name for entry in selected]
@@ -167,9 +170,7 @@ def _selection(inventory, hosts, env_file):
             )
         )
         if entry.name == "coordinator":
-            if declaration["local_agent"] is not None or declaration.get(
-                "slurm_profiles"
-            ):
+            if declaration["local_agent"] is not None or (declaration.get("slurm_profiles") and not runtime_upgrade):
                 raise QueueConfigError(
                     "setup supports a pure coordinator and separate agents"
                 )
@@ -179,7 +180,7 @@ def _selection(inventory, hosts, env_file):
         else:
             spec = read_agent_spec(entry.config, env_file=selected_env)
             declared = cast(dict[str, Any], thaw_plain_data(spec.declarations))
-            if declared["slurm_profiles"]:
+            if declared["slurm_profiles"] and not runtime_upgrade:
                 raise QueueConfigError(
                     "SSH setup does not support SLURM agents"
                 )

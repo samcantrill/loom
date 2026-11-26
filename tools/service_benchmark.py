@@ -34,7 +34,7 @@ from tests.integration.queue.test_concurrent_outbound_agent import (
     _service,
     _submit,
 )
-from tests.integration.queue.test_agent_session_transport import _prepare_remote_sleep_run
+from tests.support.agent_sessions import _prepare_remote_sleep_run
 
 
 class Counters:

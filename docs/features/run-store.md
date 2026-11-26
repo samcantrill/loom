@@ -33,6 +33,20 @@ projection-bearing historical imports retain their existing admission checks and
 remain non-authoritative. The layout and local status APIs described below also
 cover that historical format.
 
+Coordinators can read the committed outcome of one prepared binding by run URI,
+assignment ID and attempt ID. An exact read reports an absent binding, a pending
+binding, an unbind, a granted fence or a pre-start failure reason. A conflicting
+attempt or unavailable authority raises an error. Reading these facts leaves the
+run revision unchanged.
+
+For a service-backed Slurm deployment, upgrade the authority service before
+enabling the coordinator. A coordinator with Slurm profiles requires the per-run
+fencing capability in `/ready` to advertise `read_prepared_binding: true`.
+Reload also checks this capability while retired Slurm profiles still own work.
+Resident-only coordinators can continue using an earlier service or a custom
+adapter. The service authorizes receipt reads against the coordinator principal
+for the admitted run. Embedded authority and its coordinator ship together.
+
 Run lifecycle timing is retained transactionally by both authority backends.
 `AuthoritativeRunSnapshot.started_at` records the first authoritative transition
 to `RUNNING`, including managed worker start confirmation, and survives recovery.

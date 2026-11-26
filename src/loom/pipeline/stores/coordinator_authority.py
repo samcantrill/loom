@@ -41,10 +41,13 @@ from .authority import (
     OutputCommit,
     PreparedAttemptReceipt,
     PreparedAttemptRequest,
+    PreparedBindingObservation,
     StatusTransition,
 )
 from .authority_client import AuthorityClient
+from .capabilities import BackendCapability, CapabilityScope
 from .authority_protocol import (
+    PREPARED_BINDING_READ_CAPABILITY,
     AuthorityProtocolErrorCategory,
     AuthorityProtocolMetadata,
     AuthorityProtocolOperationKind,
@@ -94,6 +97,7 @@ COORDINATOR_BIND_ATTEMPT_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/attempts/
 COORDINATOR_UNBIND_ATTEMPT_PATH = (
     f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/attempts/unbind"
 )
+COORDINATOR_READ_BINDING_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/attempts/read-binding"
 COORDINATOR_GRANT_ATTEMPT_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/attempts/grant"
 COORDINATOR_START_ATTEMPT_PATH = f"{COORDINATOR_AUTHORITY_ROUTE_PREFIX}/attempts/start"
 COORDINATOR_TERMINAL_ATTEMPT_PATH = (
@@ -361,6 +365,7 @@ def authenticated_coordinator_authority_factory(
     service_id: str,
     workspace_id: str,
     service_generation: str,
+    supports_prepared_binding_reads: bool | None = None,
 ) -> Callable[[str], "AuthenticatedCoordinatorAuthority"]:
     """Bind a pinned client identity into run-scoped authority views."""
 
@@ -369,7 +374,17 @@ def authenticated_coordinator_authority_factory(
         service_id=_non_empty(service_id, "service_id"),
         workspace_id=_non_empty(workspace_id, "workspace_id"),
         service_generation=_non_empty(service_generation, "service_generation"),
+        supports_prepared_binding_reads=supports_prepared_binding_reads,
     )
+
+
+def require_slurm_authority_compatibility(factory: object) -> None:
+    """Check the capability reported when the HTTPS factory pinned its generation."""
+    if (isinstance(factory, _AuthenticatedCoordinatorAuthorityFactory)
+            and factory.supports_prepared_binding_reads is False):
+        raise AuthorityStoreError(
+            "upgrade the authority service to support prepared binding reads before enabling Slurm recovery"
+        )
 
 
 def https_coordinator_authority_factory(
@@ -399,6 +414,13 @@ def https_coordinator_authority_factory(
         raise AuthorityStoreError(
             "authenticated authority service generation is unavailable"
         )
+    supports_prepared_binding_reads = readiness.capabilities is not None and any(
+        record.capability is BackendCapability.FENCING_TOKENS
+        and record.scope is CapabilityScope.PER_RUN
+        and record.supported
+        and record.detail.get(PREPARED_BINDING_READ_CAPABILITY) is True
+        for record in readiness.capabilities.records
+    )
     return authenticated_coordinator_authority_factory(
         AuthorityClient(
             endpoint=endpoint,
@@ -408,6 +430,7 @@ def https_coordinator_authority_factory(
         service_id=service_id,
         workspace_id=workspace_id,
         service_generation=readiness.service_generation,
+        supports_prepared_binding_reads=supports_prepared_binding_reads,
     )
 
 
@@ -417,6 +440,7 @@ class _AuthenticatedCoordinatorAuthorityFactory:
     service_id: str
     workspace_id: str
     service_generation: str
+    supports_prepared_binding_reads: bool | None
 
     def __call__(self, run_uri: str) -> "AuthenticatedCoordinatorAuthority":
         return AuthenticatedCoordinatorAuthority(
@@ -657,6 +681,17 @@ class AuthenticatedCoordinatorAuthority:
         if type(failed) is not bool:
             raise ValueError("invalid unstarted failure receipt")
         return failed
+
+    def read_prepared_binding(
+        self, run_uri: str, *, assignment_id: str, attempt_id: str
+    ) -> PreparedBindingObservation:
+        result = self._call(
+            COORDINATOR_READ_BINDING_PATH, run_uri, body=_attempt_pair_body(assignment_id, attempt_id)
+        )
+        observation = PreparedBindingObservation.from_dict(_body_required(result, "observation"))
+        if observation.assignment_id != assignment_id or observation.attempt_id != attempt_id:
+            raise AuthorityStoreError("prepared binding observation identity conflicts")
+        return observation
 
     def grant_prepared_attempt(
         self, run_uri: str, *, assignment_id: str, attempt_id: str

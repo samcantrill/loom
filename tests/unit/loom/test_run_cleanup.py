@@ -1,6 +1,8 @@
 """Terminal science and this caller's physical release are separate facts."""
 
+import json
 from pathlib import Path
+import sqlite3
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -24,13 +26,15 @@ def _case(monkeypatch, *, owner="assignment", preparation=False, mode="release",
             return {"retained": mode != "release" or clock.polls == 1, "cleanup_blocked": None}
         assert operation == "admission"
         clock.admissions.append(payload["admission_id"])
-        owners = {
+        owners: dict[str, Any] = {
             "assignment": {"availability": "available", "assignments": []},
             "slurm": {"availability": "available", "assignments": []},
             "execution": {"availability": "available", "journal": []},
         }
         selected = "preparation" if preparation else "target"
-        if payload["admission_id"] == selected and mode != "other":
+        if owner == "remote_delivery":
+            owners["remote_release_pending"] = payload["admission_id"] == selected and mode != "other"
+        elif payload["admission_id"] == selected and mode != "other":
             key = "journal" if owner == "execution" else "assignments"
             owners[owner][key] = [{"state": "terminal_acknowledged"}]
             if mode == "unavailable":
@@ -54,6 +58,7 @@ def _case(monkeypatch, *, owner="assignment", preparation=False, mode="release",
 
 @pytest.mark.parametrize("owner,preparation", [
     ("assignment", False), ("assignment", True), ("slurm", False), ("execution", False),
+    ("remote_delivery", False), ("remote_delivery", True),
 ])
 def test_cleanup_waits_for_own_release(monkeypatch, owner, preparation):
     clock, available, observation = _case(monkeypatch, owner=owner, preparation=preparation)
@@ -63,11 +68,45 @@ def test_cleanup_waits_for_own_release(monkeypatch, owner, preparation):
     assert ("preparation" if preparation else "target") in clock.admissions
 
 
+def test_remote_release_is_scoped_to_the_run_and_assignment():
+    from loom.queue._service_lifetime import remote_release_pending
+
+    with sqlite3.connect(":memory:") as conn:
+        conn.execute("CREATE TABLE remote_assignments (assignment_id TEXT PRIMARY KEY, run_uri TEXT, state TEXT)")
+        conn.executemany("INSERT INTO remote_assignments VALUES (?, ?, ?)", [
+            ("finished", "target", "RELEASED"), ("waiting", "target", "TERMINAL"),
+            ("other", "another", "TERMINAL"),
+        ])
+        assert remote_release_pending(conn, "target", ("finished", "waiting"))
+        assert not remote_release_pending(conn, "target", ("finished", "missing", "other"))
+        conn.execute("UPDATE remote_assignments SET state = 'RELEASED' WHERE assignment_id = 'waiting'")
+        assert not remote_release_pending(conn, "target", ("waiting",))
+
+
 def test_cleanup_returns_when_only_other_work_remains(monkeypatch):
     clock, available, observation = _case(monkeypatch, mode="other")
     result = _run._cleanup(cast(Any, available), cast(Any, observation), 0.2)
     assert result["coordinator"] == {"state": "retained-for-other-work", "evidence": {}}
-    assert clock.polls == 1 and clock.now == 0
+    assert clock.polls == 2 and clock.now == 0
+
+
+def test_cleanup_observes_last_release_between_lifetime_and_admission(monkeypatch):
+    clock, available, observation = _case(monkeypatch, mode="other")
+    original = available.client._native_call
+
+    def call(operation, payload, expected, *, deadline):
+        result = original(operation, payload, expected, deadline=deadline)
+        if operation == "service_lifetime" and clock.polls > 1:
+            result["retained"] = False
+        return result
+
+    available.client._native_call = call
+    monkeypatch.setattr(_run, "_process_receipt", lambda root: (
+        "stopped" if clock.now > 0 else "running", {},
+    ))
+    result = _run._cleanup(cast(Any, available), cast(Any, observation), 0.2)
+    assert result["coordinator"] == {"state": "stopped", "evidence": {}}
+    assert clock.now > 0
 
 
 @pytest.mark.parametrize("mode", ["pending", "unavailable"])
@@ -86,3 +125,25 @@ def test_cleanup_skips_assignment_join_for_unowned_services(monkeypatch, lifetim
     result = _run._cleanup(cast(Any, available), cast(Any, observation), 0.2)
     assert cast(dict[str, Any], result["coordinator"])["state"] == "persistent/borrowed"
     assert clock.admissions == []
+
+@pytest.mark.parametrize(("state", "observed_start", "expected"), [
+    ("S", "427", "running"), ("Z", "427", "stopped"),
+    ("S", "428", "stopped"), (None, None, "stopped"),
+])
+def test_stopped_receipt_matches_process_birth(tmp_path, monkeypatch, state, observed_start, expected):
+    receipt = {"pid": 812, "started": "427", "stopped": True}
+    with sqlite3.connect(tmp_path / "control.sqlite") as conn:
+        conn.execute("CREATE TABLE root_metadata (key TEXT, value TEXT)")
+        conn.executemany("INSERT INTO root_metadata VALUES (?, ?)", [
+            ("service_lifetime", "run"), ("service_process", json.dumps(receipt)),
+        ])
+
+    def read_stat(path):
+        assert path == Path("/proc/812/stat")
+        if state is None:
+            raise FileNotFoundError(path)
+        fields = [state, *(["0"] * 18), observed_start]
+        return b"812 (loom ) worker\\xff) " + " ".join(fields).encode()
+
+    monkeypatch.setattr(Path, "read_bytes", read_stat)
+    assert _run._process_receipt(tmp_path) == (expected, receipt)

@@ -161,22 +161,14 @@ def _coordinator_slurm_settlement(root: Path, root_id: str, waits: list[str]) ->
             waits.append("slurm_assignment_or_release")
 
 
-def _agent_execution_settlement(
-    root: Path, control: sqlite3.Connection, root_id: str, waits: list[str],
-    *, verified_inventory: dict[str, object] | None = None,
-    pending_acknowledgement: str | None = None,
-) -> None:
-    from ._agent_process_supervisor import AgentProcessSupervisor
-    from ._managed_local import _require_agent_journal_schema
-
+def _agent_store_requirements(control, verified_inventory=None) -> tuple[bool, bool]:
     row = control.execute(
         "SELECT value FROM root_metadata WHERE key = 'execution_store_requirements'"
     ).fetchone()
     if row is None and verified_inventory is None:
         # Never infer that a missing supervisor was intentionally omitted. A
         # stopped upgrade can establish legacy inventory from verified config.
-        supervisor_required = True
-        slurm_required = False
+        return True, False
     else:
         value = json.loads(row[0]) if row is not None else verified_inventory
         if (
@@ -187,7 +179,25 @@ def _agent_execution_settlement(
             or not (value["supervisor"] or value["slurm"])
         ):
             raise ValueError("execution store requirements are unavailable")
-        supervisor_required, slurm_required = value["supervisor"], value["slurm"]
+        return value["supervisor"], value["slurm"]
+
+
+def replacement_requires_supervisor(root: Path) -> bool:
+    """The stopped owner must lock any retained or required resident supervisor."""
+    with _readonly_root(root) as control:
+        supervisor, _ = _agent_store_requirements(control)
+    return supervisor or (root / "supervisor").exists()
+
+
+def _agent_execution_settlement(
+    root: Path, control: sqlite3.Connection, root_id: str, waits: list[str],
+    *, verified_inventory: dict[str, object] | None = None,
+    pending_acknowledgement: str | None = None,
+) -> None:
+    from ._agent_process_supervisor import AgentProcessSupervisor
+    from ._managed_local import _require_agent_journal_schema
+
+    supervisor_required, slurm_required = _agent_store_requirements(control, verified_inventory)
     if control.execute(
         "SELECT 1 FROM agent_controls_local WHERE effect_json IS NULL OR "
         "(acknowledged = 0 AND (? IS NULL OR operation_id != ?)) LIMIT 1",

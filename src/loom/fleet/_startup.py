@@ -5,6 +5,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 import time
 
+from loom._proc_stat import read_process_stat
 from loom.fleet.configuration import protected_directory
 from loom.queue.errors import QueueConflictError
 
@@ -19,10 +20,10 @@ class ServiceStarting(Exception):
 
 def process_identity(pid):
     try:
-        fields = Path(f"/proc/{int(pid)}/stat").read_text().rsplit(")", 1)[1].split()
-        if fields[0] == "Z":
+        process = read_process_stat(int(pid))
+        if process.state == "Z":
             raise FileNotFoundError
-        return {"pid": int(pid), "started": fields[19]}
+        return {"pid": int(pid), "started": process.start_ticks}
     except (FileNotFoundError, ProcessLookupError) as exc:
         raise QueueConflictError("service_start_failed: launched process exited") from exc
 

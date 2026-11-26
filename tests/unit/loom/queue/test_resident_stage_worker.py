@@ -58,7 +58,7 @@ def test_resident_main_passes_outer_boundary_containment_owner(
         finished_at="2026-10-19T00:00:01Z", executor_name="local",
         executor_metadata={"existing": "kept"},
     )
-    ticks = iter((0, 1) + ((0, 1) if shared else ()) + (1, 3, 5, 8, 10, 17))
+    ticks = iter((0, 1) + ((1, 2) if shared else ()) + (2, 4, 5, 8, 10, 17))
     monkeypatch.setattr(phase_timing, "monotonic", lambda: next(ticks))
 
     def reopen_workspace(_agent_root, _assignment_id, *, _allow_initialize):

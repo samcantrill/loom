@@ -25,8 +25,11 @@ import stat
 from threading import Event
 from time import monotonic
 from types import MappingProxyType
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
+
+if TYPE_CHECKING:
+    from .gpu.local import LocalGpuInventoryProvider
 
 from loom.serialization import PlainData, freeze_plain_data, thaw_plain_data
 
@@ -345,6 +348,7 @@ def load_coordinator_service_config(
     current: CoordinatorServiceConfig | None = None,
     _allow_unready: bool = False,
     _deadline: float | None = None,
+    _gpu_inventory_provider: LocalGpuInventoryProvider | None = None,
 ) -> CoordinatorServiceConfig:
     """Load one protected coordinator role, observing its selected installation.
 
@@ -362,7 +366,8 @@ def load_coordinator_service_config(
     base = source.parent
     root = _path(payload, "deployment_root", base)
     local_agent = _local_agent_service(
-        payload["local_agent"], base, allow_unready=_allow_unready, deadline=_deadline
+        payload["local_agent"], base, allow_unready=_allow_unready, deadline=_deadline,
+        gpu_inventory_provider=_gpu_inventory_provider,
     )
     remote_profiles, container_capabilities, preparation_policy = _coordinator_execution_declarations(
         payload, base, local_agent
@@ -370,6 +375,7 @@ def load_coordinator_service_config(
     authority_factory = _coordinator_authority_factory(
         _mapping(payload, "authority"), base, deployment_root=root,
         storage=parse_storage_policy(payload.get("storage")),
+        require_slurm=bool(payload.get("slurm_profiles")),
     )
     coordinator_identity = _coordinator_immutable_projection(payload)
     if "state_root" in _mapping(payload, "authority"):
@@ -519,12 +525,14 @@ def load_outbound_agent_service_config(
     env_file: str | Path | None = None,
     _allow_unready: bool = False,
     _deadline: float | None = None,
+    _gpu_inventory_provider: LocalGpuInventoryProvider | None = None,
 ) -> OutboundAgentServiceConfig:
     """Read protected declarations and fully qualify the selected installation."""
     return qualify_agent_spec(
         read_agent_spec(path, env_file=env_file),
         _allow_unready=_allow_unready,
         _deadline=_deadline,
+        _gpu_inventory_provider=_gpu_inventory_provider,
     )
 
 
@@ -690,7 +698,8 @@ def read_agent_spec(
 
 
 def qualify_agent_spec(
-    spec: AgentSpec, *, _allow_unready: bool = False, _deadline: float | None = None
+    spec: AgentSpec, *, _allow_unready: bool = False, _deadline: float | None = None,
+    _gpu_inventory_provider: LocalGpuInventoryProvider | None = None,
 ) -> OutboundAgentServiceConfig:
     """Qualify a declaration snapshot using the normal execution checks.
 
@@ -775,7 +784,7 @@ def qualify_agent_spec(
     }
     fingerprint = _canonical_fingerprint(_outbound_immutable_projection(payload))
     resource_inventory, effective_capacity = _agent_resource_inventory(
-        payload.get("resources")
+        payload.get("resources"), _gpu_inventory_provider
     )
     occupancy_policy = _gpu_occupancy_policy(payload.get("resources"))
     if occupancy_policy is not None and payload.get("provider_factory") is not None:
@@ -1547,6 +1556,7 @@ def _local_agent_service(
     *,
     allow_unready: bool = False,
     deadline: float | None = None,
+    gpu_inventory_provider: LocalGpuInventoryProvider | None = None,
 ) -> LocalAgentServiceConfig | None:
     """Load the optional protected agent role used by a local coordinator."""
 
@@ -1582,7 +1592,7 @@ def _local_agent_service(
         raise QueueConfigError("local agent service requires one resident profile")
     provider_configuration = payload.get("providers")
     resource_inventory, effective_capacity = _agent_resource_inventory(
-        payload.get("resources")
+        payload.get("resources"), gpu_inventory_provider
     )
     profile = profiles[0]
     if resource_inventory is not None:
@@ -1647,7 +1657,7 @@ def _normalize_outbound_agent_payload(
 
 
 def _agent_resource_inventory(
-    value: object,
+    value: object, provider: LocalGpuInventoryProvider | None = None,
 ) -> tuple[AgentResourceInventory | None, EffectiveAgentCapacity | None]:
     """Load one agent-owned capacity declaration and its selected NVIDIA cards."""
 
@@ -1664,9 +1674,9 @@ def _agent_resource_inventory(
         )
 
         try:
-            selected = resolve_nvidia_gpu_selection(
-                selection, NvidiaSmiGpuInventoryProvider().discover()
-            )
+            if provider is None:
+                provider = NvidiaSmiGpuInventoryProvider()
+            selected = resolve_nvidia_gpu_selection(selection, provider.get_inventory())
             devices = tuple(
                 ResidentGpuDevice(
                     GpuDeviceDescriptor(
@@ -1825,6 +1835,7 @@ def _coordinator_authority_factory(
     *,
     deployment_root: Path,
     storage=None,
+    require_slurm: bool = False,
 ) -> CoordinatorAuthorityFactory:
     """Construct one explicit trusted authority factory for this role.
 
@@ -1877,9 +1888,10 @@ def _coordinator_authority_factory(
         from loom.pipeline.stores.coordinator_authority import (
             CoordinatorAuthorityTlsConfig,
             https_coordinator_authority_factory,
+            require_slurm_authority_compatibility,
         )
 
-        return cast(
+        factory = cast(
             CoordinatorAuthorityFactory,
             https_coordinator_authority_factory(
                 _string(value, "url"),
@@ -1894,6 +1906,12 @@ def _coordinator_authority_factory(
         )
     except (OSError, ValueError) as exc:
         raise QueueConfigError("HTTPS authority is unavailable or invalid") from exc
+    if require_slurm:
+        try:
+            require_slurm_authority_compatibility(factory)
+        except ValueError as exc:
+            raise QueueConfigError(str(exc)) from exc
+    return factory
 
 
 def _trusted_target(value: Mapping[str, object], label: str) -> object:
@@ -2967,7 +2985,15 @@ def service_replacement_guard(
             elif (_has_retained_agent_work(journal, execution, slurm)
                     or journal.recovery_poll(_OUTBOUND_POLL_WAIT_MS) is not None):
                 raise QueueConflictError("replacement requires settled agent work and poll outcomes")
-            with retained_supervisor_guard(spec.agent_root, agent_id=journal.root_id):
+            from .service_upgrade import replacement_requires_supervisor
+
+            if (spec.declarations["resident_profiles"] or spec.declarations.get("container_policies")
+                    or replacement_requires_supervisor(spec.agent_root)):
+                with retained_supervisor_guard(spec.agent_root, agent_id=journal.root_id):
+                    yield
+            else:
+                # The agent journal lock already owns this stopped Slurm-only
+                # role; its declared scheduler store was opened and checked above.
                 yield
         finally:
             journal.close()

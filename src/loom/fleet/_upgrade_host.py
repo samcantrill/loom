@@ -130,6 +130,26 @@ def inspect(request, *, native_owner=None):
     return facts
 
 
+def _settlement(request, *, include_pending_poll=True):
+    fact = cast(dict[str, Any], inspect_service_settlement(
+        native_root(request), expected_root_id=request["expected_root_id"],
+        include_pending_poll=include_pending_poll,
+    ).to_dict())
+    if request.get("slurm_profiles"):
+        from ._slurm_upgrade import observe
+
+        evidence = observe(request)
+        value = fact["value"]
+        value["slurm"] = evidence
+        if evidence["status"] != "settled" or evidence["profiles"] != request["slurm_profiles"]:
+            value["settled"] = False
+            value.setdefault("wait_reasons", []).append(
+                evidence.get("reason", "slurm_" + evidence["status"])
+                if evidence["profiles"] == request["slurm_profiles"] else "slurm_profile_changed"
+            )
+    return fact
+
+
 def _settled(request):
     if request.get("recovery_results") is not None:
         from loom.queue.service_upgrade import require_result_recovery
@@ -137,14 +157,12 @@ def _settled(request):
             native_root(request), expected_root_id=request["expected_root_id"],
             role=role(request), agent_results=request["recovery_results"],
         ).to_dict()
-    observation = inspect_service_settlement(
-        native_root(request), expected_root_id=request["expected_root_id"]
-    )
-    if observation.availability != "available" or not observation.value.get("settled"):
+    observation = _settlement(request)
+    if observation["availability"] != "available" or not observation["value"].get("settled"):
         raise QueueConflictError(
-            "native service settlement required: " + str(observation.to_dict())
+            "native service settlement required: " + str(observation)
         )
-    return observation.to_dict()
+    return observation
 
 
 def stop(request):
@@ -298,13 +316,13 @@ def execute(request):
             agent_results=request["recovery_results"],
         ).to_dict()
     if action == "upgrade-settlement":
-        return inspect_service_settlement(
-            native_root(request),
-            expected_root_id=request["expected_root_id"],
-            include_pending_poll=request.get("include_pending_poll", True),
-        ).to_dict()
+        return _settlement(request, include_pending_poll=request.get("include_pending_poll", True))
     if action == "upgrade-stop":
         return stop(request)
+    if action == "upgrade-retire-environment":
+        from ._slurm_retirement import retire
+
+        return retire(request)
     if action == "upgrade-replace":
         return replace(request)
     raise QueueConflictError("unsupported fixed upgrade step")

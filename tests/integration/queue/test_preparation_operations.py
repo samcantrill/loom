@@ -582,9 +582,13 @@ def test_unqualified_or_different_profile_cannot_take_preparation_but_runs_ordin
             daemon.reconcile_once()
             operation = client.operation("prepare-1")
             assert operation.state == "pending"
-            child = client.admission(
-                _result(operation)["preparation_admission_id"]
-            ).admission
+            child_id = _result(operation)["preparation_admission_id"]
+            deadline = monotonic() + 25
+            child = client.admission(child_id).admission
+            while child.state.value == "PENDING_AUTHORITY":
+                assert monotonic() < deadline, child
+                sleep(0.02)
+                child = client.admission(child_id).admission
             # Admission projection can be ACTIVE between scheduling passes;
             # native assignments establish whether an ineligible worker ran it.
             assert child.state.value in {"ACTIVE", "WAITING"}, child
@@ -3010,9 +3014,13 @@ def test_direct_admission_creator_survives_replay_from_another_transport(tmp_pat
         try:
             with (CoordinatorClient.from_connection_file(tmp_path / "client.json") as https,
                   CoordinatorClient.from_unix_socket(service.daemon.endpoint) as unix):
-                descriptor = service.daemon.resident_worker_launch_profile.descriptor
+                profile = service.daemon.resident_worker_launch_profile
+                assert profile is not None
+                descriptor = profile.descriptor
                 execution = ExecutionRequirement(
-                    descriptor["project_fingerprint"], descriptor["environment_fingerprint"], descriptor["executor_fingerprint"],
+                    cast(str, descriptor["project_fingerprint"]),
+                    cast(str, descriptor["environment_fingerprint"]),
+                    cast(str, descriptor["executor_fingerprint"]),
                 )
                 pipeline = compose_config(tmp_path / "projects" / "pipeline.yaml")
                 creators = ((https, unix, "remote", "client"), (unix, https, "local", f"uid:{os.getuid()}"))
@@ -3024,6 +3032,7 @@ def test_direct_admission_creator_survives_replay_from_another_transport(tmp_pat
                     assert replayed.admission_id == first.admission_id
                     assert "admitted_by" not in replayed.to_dict()
                     page = observer.list_queue(principal=principal, include_terminal=True)
-                    assert [(row["queue_item_id"], row["admitted_by"]) for row in page["admissions"]] == [(name, principal)]
+                    rows = cast(list[dict[str, Any]], page["admissions"])
+                    assert [(row["queue_item_id"], row["admitted_by"]) for row in rows] == [(name, principal)]
         finally:
             local.stop()

@@ -56,7 +56,8 @@ from loom.queue.deployment import (
     OutboundAgentRegistrationConfig,
     run_outbound_agent_service,
 )
-from tests.integration.queue.test_agent_session_transport import (
+from tests.support.agent_sessions import (
+    restart_daemon,
     _prepare_remote_sleep_run,
     _fresh_remote_agent_root,
 )
@@ -245,10 +246,27 @@ def remote_work(remote_owner: _RemoteWork) -> _RemoteWork:
     return work
 
 
+@pytest.mark.parametrize("negotiated", [False, True], ids=["synchronous", "pending-replay"])
 def test_stop_finishes_cancellation_that_prevents_worker_launch(
     remote_owner: _RemoteWork,
     monkeypatch: pytest.MonkeyPatch,
+    negotiated: bool,
 ) -> None:
+    from loom.queue.agent_sessions import AgentSessionService, LIFECYCLE_CAPABILITY
+
+    # An older coordinator replies to the permit synchronously. A negotiated
+    # HTTP 202 is a durable replay boundary at which an agent may stop.
+    if not negotiated:
+        handshake = AgentSessionService.handshake
+
+        def synchronous(service):
+            result = dict(handshake(service))
+            capabilities = result["capabilities"]
+            assert isinstance(capabilities, (tuple, list))
+            result["capabilities"] = [value for value in capabilities if value != LIFECYCLE_CAPABILITY]
+            return result
+        monkeypatch.setattr(AgentSessionService, "handshake", synchronous)
+
     work = remote_owner
     permit_entered, allow_permit = Event(), Event()
     original_permit = LocalDaemonAgentHttpClient.start_permit
@@ -273,6 +291,9 @@ def test_stop_finishes_cancellation_that_prevents_worker_launch(
     service.thread.join(timeout=3)
     assert not service.thread.is_alive(), service.errors
     assert service.errors == []
+    if negotiated:
+        assert work.launches() == ()
+        work.start_agent()  # Reopen the retained assignment and settle the denied permit.
     assert coordinator.wait("lifecycle", timeout_seconds=10).state is (
         LocalDaemonAdmissionState.CANCELLED
     )
@@ -517,8 +538,7 @@ def test_service_registration_recovers_uncertainty_across_coordinator_restart(
         assert client._require_journal().pending_registration() == request
     finally:
         client.close()
-    work.daemon.stop()
-    work.daemon.start()
+    restart_daemon(work.daemon)
     service = work.start_agent()
 
     def registered_in_current_epoch():
@@ -681,8 +701,7 @@ def test_outstanding_poll_recovery_across_coordinator_epoch(
     finally:
         probe.close()
     old_epoch = work.daemon._epoch
-    work.daemon.stop()
-    work.daemon.start()
+    restart_daemon(work.daemon)
     assert work.daemon._epoch != old_epoch
     second = work.start_agent()
     deadline = monotonic() + 45

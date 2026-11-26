@@ -336,3 +336,75 @@ def test_resident_promotion_cannot_substitute_submitted_qualification(monkeypatc
     with pytest.raises(QueueConfigError, match="installed-profile checks"):
         upgrades.preview(object(), workload_profile="resident", image=Path("/image.sif"),
                          check_execution=object())
+
+
+def test_workload_preview_qualifies_only_selected_consumers(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    from copy import deepcopy
+    import json
+
+    from loom.coordinator import CoordinatorOperatorClient
+    from loom.fleet import workload_upgrades
+    from loom.queue.errors import QueueConfigError
+
+    def write(name, value):
+        path = tmp_path / name
+        path.write_text(json.dumps(value))
+        path.chmod(0o600)
+        return path
+
+    for name in ("ca", "cert", "key"):
+        write(name, "fixture")
+    connection = write("connection.json", {
+        "kind": "loom.coordinator-client", "schema_version": 1, "expected_coordinator_id": "coord",
+        "transport": {"kind": "https", "url": "https://coordinator.invalid",
+                      "server_ca_path": "ca", "certificate_path": "cert", "private_key_path": "key"},
+    })
+    deployment = write("deployment.json", {
+        "kind": "loom.deployment", "schema_version": 1, "connection": str(connection),
+        "preparation": {"profile": "prepare", "source": {
+            "mode": "shared", "root": "projects", "path": ".", "include": ["."]}},
+    })
+    source = {"profile_id": "target", "revision": "before"}
+    candidate = {**source, "revision": "after"}
+    declarations = {
+        "coordinator": {"remote_profiles": [source], "preparation": {
+            "profiles": {"prepare": {"resident_profile_id": "target"}}}},
+        "a": {"resident_profiles": [{"descriptor": source}]},
+        "b": {"resident_profiles": [{"descriptor": {"profile_id": "unrelated"}}]},
+        "c": {"resident_profiles": [], "container_policies": [{"policy_id": "submitted"}]},
+    }
+    hosts = {name: {"host": name, "source_release": "one",
+                    "native_owner": {"value": {"capabilities": [workload_upgrades.CAPABILITY]}}}
+             for name in declarations}
+    inventory = SimpleNamespace(runtime_release="one", hosts=[
+        SimpleNamespace(name=name, env_file=None) for name in hosts])
+    checks = upgrades._checks(inventory, deployment, connection, "check.yaml")
+    maintenance = {"hosts": hosts, "declarations": declarations, "release": "one", "checks": checks,
+                   "agents": {name: {} for name in ("a", "b", "c")}, "gate": {"settled": False}}
+    monkeypatch.setattr(CoordinatorOperatorClient, "from_connection_file", lambda _: nullcontext())
+    monkeypatch.setattr(upgrades, "_capable", lambda _: hosts["coordinator"]["native_owner"])
+    monkeypatch.setattr(upgrades, "preview", lambda *args, **kwargs: deepcopy(maintenance))
+    probed = []
+
+    def probe(requests):
+        probed.extend(requests)
+        return {name: {"target": {"profile": candidate},
+                       "declaration": {"resident_profiles": [{"descriptor": candidate}]}}
+                for name in requests}
+
+    monkeypatch.setattr(upgrades.sshops, "_ssh_many", probe)
+    options = dict(image=write("image.sif", "fixture"), deployment=deployment, connection=connection)
+    with pytest.raises(QueueConfigError, match="no consuming agents"):
+        workload_upgrades.preview(inventory, workload_profile="absent", **options)
+    plan = workload_upgrades.preview(inventory, workload_profile="target", **options)
+    intent = workload_upgrades.bind_intent(
+        {"check_selection": checks, "inputs": {}, "agents": plan["agents"], "hosts": plan["hosts"]},
+        plan, tmp_path,
+    )
+    assert probed == ["a"]
+    assert set(intent["agents"]) == set(intent["candidates"]) == {"a"}
+    assert set(intent["hosts"]) == set(declarations)
+    assert plan["gate"] == {"settled": False}
+    for name in ("b", "c"):
+        assert intent["target_declarations"][name] == declarations[name]

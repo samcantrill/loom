@@ -496,6 +496,18 @@ def _granted_fixture(root, *, version):
     return fixture, assignment.assignment_id
 
 
+def test_existing_grant_can_repair_only_its_own_unfenced_action(tmp_path):
+    fixture, identity = _granted_fixture(tmp_path, version=4)
+    store = fixture.reopen()
+    assignment = store.read_agent_task(identity).assignment
+    attempts = {(assignment.run_uri, "different-attempt"), ("different-run", assignment.attempt_id)}
+    assert store.retained_action_fences(attempts) == ()
+    attempts.add((assignment.run_uri, assignment.attempt_id))
+    assert store.retained_action_fences(attempts) == (
+        (assignment.run_uri, assignment.attempt_id, identity, "fence"),
+    )
+
+
 def test_start_permit_exact_replay_survives_reopen_and_racing_other_invocation(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier

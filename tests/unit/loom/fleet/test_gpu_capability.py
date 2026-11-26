@@ -3,6 +3,7 @@
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+import hashlib
 import json
 import sys
 
@@ -139,7 +140,11 @@ def test_submitted_gpu_probe_uses_exact_image_and_native_inventory(tmp_path, mon
         assert "--nv" in command.argv
         assert not any("/loom/unselected" in argument for argument in command.argv)
         assert f"CUDA_VISIBLE_DEVICES={DEVICE}" in command.argv
-        index = command.argv.index(str(image))
+        worker = command.metadata["worker_command"]
+        index = len(command.argv) - len(worker) - 1
+        physical_image = Path(command.argv[index])
+        assert physical_image != image
+        assert hashlib.sha256(physical_image.read_bytes()).hexdigest() == execution.image.sha256
         assert command.argv[index + 1] == execution.python_executable
         mount = next(value for value in command.argv if value.endswith(":/tmp:rw"))
         source = Path(mount.removesuffix(":/tmp:rw"))

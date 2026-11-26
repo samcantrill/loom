@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol, runtime_checkable
 from typing import cast
 
@@ -377,6 +378,76 @@ class ExecutionFence:
     def __post_init__(self) -> None:
         for name in ("assignment_id", "attempt_id", "fencing_token"):
             _non_empty(getattr(self, name), name)
+
+
+class PreparedBindingState(StrEnum):
+    ABSENT = "absent"
+    BOUND = "bound"
+    GRANTED = "granted"
+    UNBOUND = "unbound"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedBindingObservation:
+    """Committed authority evidence for one assignment/attempt pair."""
+
+    assignment_id: str
+    attempt_id: str
+    state: PreparedBindingState
+    fence: ExecutionFence | None = None
+    reason: LifecycleReason | None = None
+
+    def __post_init__(self) -> None:
+        _non_empty(self.assignment_id, "assignment_id")
+        _non_empty(self.attempt_id, "attempt_id")
+        if (self.fence is not None) != (self.state is PreparedBindingState.GRANTED):
+            raise AuthorityStoreError("grant observation requires its execution fence")
+        if self.fence is not None and (
+            self.fence.assignment_id != self.assignment_id
+            or self.fence.attempt_id != self.attempt_id
+        ):
+            raise AuthorityStoreError("prepared binding observation fence conflicts")
+        if (self.reason is not None) != (self.state is PreparedBindingState.FAILED):
+            raise AuthorityStoreError("failed binding observation requires its reason")
+
+    def to_dict(self) -> dict[str, PlainData]:
+        return {
+            "assignment_id": self.assignment_id,
+            "attempt_id": self.attempt_id,
+            "state": self.state.value,
+            "fencing_token": self.fence.fencing_token
+            if self.fence is not None
+            else None,
+            "reason": self.reason.to_dict() if self.reason is not None else None,
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> "PreparedBindingObservation":
+        body = _mapping(value, "PreparedBindingObservation")
+        _reject_unknown(
+            body,
+            {"assignment_id", "attempt_id", "state", "fencing_token", "reason"},
+            "PreparedBindingObservation",
+        )
+        assignment_id = _non_empty(_required(body, "assignment_id"), "assignment_id")
+        attempt_id = _non_empty(_required(body, "attempt_id"), "attempt_id")
+        token = _optional_string(body.get("fencing_token"), "fencing_token")
+        return cls(
+            assignment_id,
+            attempt_id,
+            PreparedBindingState(_required(body, "state")),
+            ExecutionFence(assignment_id, attempt_id, token)
+            if token is not None
+            else None,
+            _optional_reason(body.get("reason")),
+        )
+
+
+class PreparedBindingReader(Protocol):
+    def read_prepared_binding(
+        self, run_uri: str, *, assignment_id: str, attempt_id: str
+    ) -> PreparedBindingObservation: ...
 
 
 @runtime_checkable
@@ -1237,6 +1308,9 @@ __all__ = [
     "AttemptAllocation",
     "PreparedAttemptAuthority",
     "PreparedAttemptExecutionAuthority",
+    "PreparedBindingObservation",
+    "PreparedBindingReader",
+    "PreparedBindingState",
     "PreparedAttemptRequest",
     "PreparedAttemptReceipt",
     "ExecutionFence",

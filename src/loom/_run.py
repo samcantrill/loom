@@ -12,6 +12,7 @@ import time
 from typing import cast
 from uuid import uuid4
 
+from loom._proc_stat import read_process_stat
 from loom.coordinator import CoordinatorClientError, RunObservation, RunRequest
 from loom.deployment import AvailableDeployment, DeploymentSelection, ensure_available, load_deployment
 from loom.queue.errors import QueueConfigError, QueueError
@@ -48,10 +49,9 @@ def _process_receipt(root: Path) -> tuple[str, dict[str, PlainData]]:
         return "persistent/borrowed", {}
     value = json.loads(rows.get("service_process", "{}"))
     if value.get("stopped"):
-        process = Path(f"/proc/{value['pid']}/stat")
         try:
-            current = process.read_text().split()
-            alive = current[21] == value["started"] and current[2] != "Z"
+            current = read_process_stat(value["pid"])
+            alive = current.start_ticks == value["started"] and current.state != "Z"
         except FileNotFoundError:
             alive = False
         if not alive:
@@ -80,6 +80,8 @@ def _owned_assignments_pending(
             "admission", {"admission_id": admission_id}, available.connection_id,
             deadline=deadline,
         ))
+        if detail.owners.get("remote_release_pending") is True:
+            return True
         for name in ("assignment", "slurm"):
             owner = detail.owners.get(name)
             if not isinstance(owner, Mapping) or owner.get("availability") != "available":
@@ -117,6 +119,14 @@ def _cleanup_step(
             role["identity"]["lifetime"] == "run" for role in roles.values()
         ):
             own_pending = _owned_assignments_pending(available, observation, deadline)
+            if not own_pending:
+                # Our last release may have cleared the earlier global sample while
+                # reading the admissions. Only a later retained sample identifies other work.
+                retained = None
+                projection = available.client._native_call(
+                    "service_lifetime", {}, available.connection_id, deadline=deadline
+                )
+                retained, blocked = projection["retained"], projection["cleanup_blocked"]
     except CoordinatorClientError:
         pass
     for name, role in roles.items():

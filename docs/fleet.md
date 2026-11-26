@@ -1624,3 +1624,58 @@ keep admission closed until the full inventory matches and workload GPU checks
 pass. Reopening admission is a separate operator action. This does not weaken
 `repair-gpu-policy`, which remains contraction-only, or qualify device health
 by itself. Never edit native databases or manufacture session receipts.
+
+### Slurm runtime upgrades
+
+For a fleet-managed coordinator and outbound submit agents, use the ordinary
+runtime upgrade commands. The preview reads each selected role's protected
+configuration and native Slurm journal on its SSH host. It queries the current
+user's queue with the profile's scheduler client environment. Each role reports
+the profile fingerprints, configured bootstrap and containment paths, pending
+assignments, and matching job IDs, clusters and states. A missing profile
+binding leaves the job's paths unknown. An empty queue with unfinished native
+release is reported as `unresolved`. An unreachable scheduler is reported as
+`unavailable`. Other jobs belonging to the same user are listed separately.
+
+Select a shared-source check deployment with a submitted preparation profile
+whose `execution_route` selects Slurm. Its protected profile fingerprint must
+identify a single permitted submit agent. Supply the immutable submitted image
+through `--check-execution`. The read-only SIF must be inside a published
+directory below its declared image root so the coordinator can pin the
+publication. Both the preparation and the CPU/storage workload
+checks must execute through the selected Slurm route. The result receipts bind
+the verified publication and released assignment to the scheduler job.
+
+```bash
+loom fleet upgrade --fleet /protected/fleet.json \
+  --runtime-release /protected/candidate/release.json \
+  --deployment /protected/check-deployment.json --connection /protected/operator.json \
+  --check-execution /protected/check-image.json --maintenance-id incident --plan
+
+loom fleet upgrade --fleet /protected/fleet.json \
+  --runtime-release /protected/candidate/release.json \
+  --deployment /protected/check-deployment.json --connection /protected/operator.json \
+  --check-execution /protected/check-image.json --maintenance-id incident \
+  --operation-id replace-services --apply
+
+loom fleet operation resume replace-services --fleet /protected/fleet.json
+```
+
+An existing empty maintenance gate stays closed under its original owner.
+After qualification Fleet revokes its checks and inspects the source
+environment. It records any remaining process, profile, scheduler or
+administrative recovery consumers in the operation's retirement receipt.
+It checks executables named by idle resident roles and bootstrap paths named
+by peer roles. Deferred qualification and unreadable same-user processes
+retain the unpacked environment with an explicit removal condition.
+Fleet removes only the superseded, fleet-owned unpacked environment when these
+owners are clear and retains its verified offline restore bundle. External
+bootstrap installations and shared images have their own consumers.
+
+The installed acceptance selection `slurm-held-interruption` uses the
+runtime-upgrade acceptance schema with two additional fields, `maintenance_id`
+and `check_execution`. Provision a disposable cohort, a closed settled gate
+and a fresh report destination. The case interrupts the controller after the
+stop/replace intent, resumes its operation ID, checks that both native owners
+restarted, and verifies the physical job receipts, predecessor retirement and
+closed-gate handoff.

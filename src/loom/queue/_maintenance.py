@@ -167,7 +167,7 @@ def validate_check(check: Mapping[str, object]) -> None:
     from ._remote_stage_execution import ResidentProfileDescriptor
     from loom.pipeline.resources import ResourceRequest
 
-    if set(check) != {
+    if set(check) - {"slurm_profile"} != {
         "request",
         "principal_id",
         "agent_id",
@@ -179,6 +179,12 @@ def validate_check(check: Mapping[str, object]) -> None:
         "previous_check_id",
     }:
         raise ValueError("maintenance check fields are invalid")
+    if "slurm_profile" in check:
+        profile = check["slurm_profile"]
+        if not isinstance(profile, Mapping) or set(profile) != {"profile_id", "fingerprint"}:
+            raise ValueError("invalid maintenance Slurm profile")
+        for item in profile.values():
+            _id(item)
     for name in ("principal_id", "agent_id", "pool"):
         _id(check[name])
     if check["previous_check_id"] is not None:
@@ -189,6 +195,8 @@ def validate_check(check: Mapping[str, object]) -> None:
     if request.mode != "exact" or request.fresh_stages:
         raise ValueError("maintenance check requires an exact fresh native request")
     if request.preparation.execution is None:
+        if "slurm_profile" in check:
+            raise ValueError("maintenance Slurm qualification requires a submitted execution")
         ResidentProfileDescriptor.from_dict(cast(Mapping[str, object], check["profile"]))
     else:
         from .submitted_execution import SubmittedContainerCapability
@@ -296,6 +304,16 @@ def mutate(
                     ) != check["profile"]
                 ):
                     raise QueueConflictError("maintenance check profile conflicts")
+                if "slurm_profile" in check:
+                    route = cast(Mapping, check["slurm_profile"])
+                    identity = route["profile_id"], route["fingerprint"]
+                    permitted = [rule.agent_id for rule in daemon._agent_policy.agents
+                                 if identity in rule.external_slurm_profiles]
+                    if (selected_profile.get("execution_route") != {"kind": "slurm", "profile": identity[0]}
+                            or permitted != [check["agent_id"]] or daemon.config.agent_root is not None
+                            or not any((item.profile_id, item.configuration_fingerprint) == identity
+                                       for item in daemon.config.slurm_profiles)):
+                        raise QueueConflictError("maintenance Slurm profile has no unique selected submitter")
                 retained_key = "maintenance-check:" + check_id
                 retained = conn.execute(
                     "SELECT value FROM daemon_metadata WHERE key = ?", (retained_key,)
@@ -327,7 +345,7 @@ def mutate(
                         "preparation_resources",
                         "max_stages",
                     )
-                    if prior_binding["maintenance_id"] != value[
+                    if prior_binding["check"].get("slurm_profile") != check.get("slurm_profile") or prior_binding["maintenance_id"] != value[
                         "maintenance_id"
                     ] or any(
                         prior_binding["check"][field] != check[field] for field in slots
@@ -459,8 +477,14 @@ def _check_target(
             selected_requirement = capability.select_roots(
                 cast(Mapping[str, PlainData], shared["roots"])
             ).requirement(execution)
+        route = check.get("slurm_profile")
+        if route is not None and (
+            placement.route.profile_id != route["profile_id"]
+            or placement.route.profile_configuration_fingerprint != route["fingerprint"]
+        ):
+            raise MaintenanceCheckConflict("maintenance check Slurm route conflicts")
         if (
-            placement.target != check["agent_id"]
+            placement.target != (None if route is not None else check["agent_id"])
             or placement.pool_name != check["pool"]
             or placement.resource_request.to_dict()
             != check["preparation_resources" if preparation_child else "resources"]
@@ -500,6 +524,8 @@ def preparation_placement(
     selected = json.loads(row[0])
     check = selected.get("maintenance_check")
     if check is not None:
+        if "slurm_profile" in check:
+            return {"execution_route": {"kind": "slurm", "profile": check["slurm_profile"]["profile_id"]}}
         return {"target": check["agent_id"], "pool": check["pool"]}
     route = selected["profile"].get("execution_route")
     return None if route is None else {"execution_route": route}

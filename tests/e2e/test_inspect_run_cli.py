@@ -18,7 +18,7 @@ from loom.queue.agent_session_transport import AgentTlsServerConfig
 from loom.queue.agent_session_transport import LocalDaemonAgentHttpServer
 from loom.queue.agent_sessions import AgentPolicyConfig, TransportPrincipalPolicy
 from loom.serialization import PlainData
-from tests.integration.queue.test_agent_session_transport import (
+from tests.support.agent_sessions import (
     _credentials,
     _fingerprint,
     _local_launch_profile,

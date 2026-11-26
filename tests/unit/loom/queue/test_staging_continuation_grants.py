@@ -19,7 +19,7 @@ import pytest
 
 from loom.pipeline.planning import StageFingerprintRecord
 from loom.pipeline.stores.shared_artifacts import encoded
-from loom.queue import LocalDaemon, LocalDaemonConfig, LocalDaemonPrincipal, LocalDaemonRole
+from loom.queue import LocalDaemon, LocalDaemonPrincipal, LocalDaemonRole
 from loom.queue import _shared_publication as publication
 from loom.queue import _shared_recovery as recovery
 from loom.queue import _shared_staging_continuation as continuation
@@ -28,9 +28,9 @@ from loom.queue._publication_guards import PublicationGuards
 from loom.queue._remote_stage_execution import REGULAR_FILE_RELAY_CAPABILITY, REMOTE_EXECUTION_CAPABILITY
 from loom.queue.agent_sessions import AgentSessionService, initialize_agent_session_schema
 from loom.queue.errors import QueueConflictError
-from loom.queue.local_daemon_execution import LocalDaemonExecution, _ScopedCoordinatorAuthority
+from tests.support.slurm_bootstrap import registered_bootstrap
 from loom.queue.shared_execution import SHARED_EXECUTION_SCOPE, STAGING_CONTINUATION_CAPABILITY
-from loom.queue.slurm_ready_stage import SQLiteSlurmStageAssignments, SlurmStageDelivery, SlurmStageRecord
+from loom.queue.slurm_ready_stage import SlurmStageDelivery
 from loom.serialization import PlainData, thaw_plain_data
 from tests.unit.loom.queue.test_agent_sessions import _policy
 from tests.unit.loom.queue.test_shared_recovery import _retention_database, _workspace
@@ -187,23 +187,6 @@ def _client(tmp_path, request, profile, provider):
             input_ready=True, fence=None, state="accepted", start_consumed=False, delivery=delivery,
             assignment=SimpleNamespace(run_uri="file:///fixture", attempt_id=request.attempt_id, agent_id="agent-1"),
         )
-        execution = object.__new__(LocalDaemonExecution)
-        execution.config = cast(LocalDaemonConfig, SimpleNamespace(
-            control_database=control.path, connect_database=lambda path: control.connection(),
-            coordinator_shared_roots=profile.shared_roots,
-        ))
-        execution.daemon = cast(LocalDaemon, SimpleNamespace(_publication_guards=guards))
-
-        def authorized_record(
-            principal_id: str, credential_id: str | None, assignment_id: str, incarnation: str,
-        ) -> SlurmStageRecord:
-            return cast(SlurmStageRecord, record)
-
-        execution._slurm_authorized_record = authorized_record
-        execution._remote_authority = lambda run_uri: cast(
-            _ScopedCoordinatorAuthority, SimpleNamespace(grant_prepared_attempt=control.authority),
-        )
-
         def mark_granted(assignment_id, incarnation, fence):
             record.fence, record.state = fence, "granted"
 
@@ -211,8 +194,15 @@ def _client(tmp_path, request, profile, provider):
             record.start_consumed = True
             return True
 
-        execution.slurm_assignments = cast(
-            SQLiteSlurmStageAssignments, SimpleNamespace(mark_granted=mark_granted, consume_start=consume_start),
+        execution = registered_bootstrap(
+            record, assignment_id=request.assignment_id, incarnation="incarnation",
+            connect=lambda: sqlite3.connect(control.path, factory=control.factory),
+            authority_for=lambda _: SimpleNamespace(
+                grant_prepared_attempt=control.authority,
+                read_prepared_binding=lambda *a, **kw: SimpleNamespace(fence=control.authority(*a, **kw)),
+            ),
+            mark_granted=mark_granted, consume_start=consume_start,
+            shared_roots=profile.shared_roots, hold_publication=guards.hold,
         )
         arguments = dict(principal_id="slurm-agent", credential_id="credential",
                          assignment_id=request.assignment_id, incarnation="incarnation")

@@ -2044,6 +2044,20 @@ def test_reload_retains_the_exact_profile_for_nonterminal_slurm_work(
             ),
         )
     try:
+        if reference_owner == "accepted-runtime":
+            from loom.pipeline.stores.authority import AuthorityStoreError
+            from loom.pipeline.stores.authority_client import AuthorityClient
+            from loom.pipeline.stores.coordinator_authority import authenticated_coordinator_authority_factory
+
+            old_service = authenticated_coordinator_authority_factory(
+                AuthorityClient("https://authority.test"), service_id="service", workspace_id="workspace",
+                service_generation="generation-1", supports_prepared_binding_reads=False,
+            )
+            # Removing all active profiles still leaves the admitted work to settle.
+            with pytest.raises(AuthorityStoreError, match="upgrade the authority service"):
+                execution.prepare_scheduling_reload(
+                    replace(replacement, coordinator_authority_factory=old_service), "incompatible-epoch"
+                )
         result = daemon.operator_view(
             LocalDaemonPrincipal("operator", LocalDaemonRole.OPERATOR)
         ).reload_scheduling(
@@ -2587,19 +2601,15 @@ def test_slurm_grant_and_start_are_blocked_by_the_durable_cancel_request(
             attempt_id="attempt-1",
         ),
     )
-    execution = object.__new__(local_daemon_execution.LocalDaemonExecution)
-    subject = cast(Any, execution)
-    subject.config = SimpleNamespace(
-        control_database=control_database, connect_database=sqlite3.connect,
-    )
-    subject._slurm_authorized_record = lambda *args, **kwargs: record
-    subject._remote_authority = lambda run_uri: pytest.fail(
-        "cancellation must block authority grant"
-    )
-    subject.slurm_submissions = SimpleNamespace(
-        consume_start=lambda operation_id: pytest.fail(
-            "cancellation must block authored-root start"
-        )
+    from tests.support.slurm_bootstrap import registered_bootstrap
+
+    execution = registered_bootstrap(
+        record, assignment_id="assignment-1", incarnation="bootstrap-1",
+        principal="slurm-principal", credential="slurm-credential",
+        connect=lambda: sqlite3.connect(control_database),
+        authority_for=lambda _: pytest.fail("cancellation must block authority grant"),
+        mark_granted=lambda *_: pytest.fail("cancellation must block grant projection"),
+        consume_start=lambda *a, **k: pytest.fail("cancellation must block authored-root start"),
     )
 
     with pytest.raises(QueueConflictError, match="run is cancelling"):

@@ -6,6 +6,7 @@ import pytest
 from loom.queue._poll_recovery import recover_wait_poll
 from loom.queue.agent_session_transport import LocalDaemonAgentHttpClient
 from loom.queue.errors import QueueConflictError, QueueServiceError
+from tests.support.agent_sessions import settle_stopped_service_poll
 from .test_concurrent_outbound_agent import _service, _rows, _submit
 
 pytestmark = pytest.mark.integration
@@ -19,7 +20,7 @@ def test_conflicting_poll_requires_terminal_wait_and_preserves_history(monkeypat
         assert not case.thread.is_alive()
         owner = LocalDaemonAgentHttpClient(case.config.client)
         try:
-            owner._resume_pending_poll(wait_timeout_ms=100)
+            settle_stopped_service_poll(owner)
             # Stopping the service can leave an unanswered WAIT poll. The
             # synchronous recovery owner remains admission-restricted even
             # after resolving it; reopen to assess the now-settled journal

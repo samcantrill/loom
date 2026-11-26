@@ -25,7 +25,7 @@ from loom.queue.agent_sessions import AgentOffer, AgentOfferRenewal, AgentPolicy
 from loom.queue.agent_session_transport import AgentTlsClientConfig, AgentTlsServerConfig, LocalDaemonAgentHttpClient, LocalDaemonAgentHttpServer, _resident_provider_descriptors
 from loom.queue._remote_stage_execution import REGULAR_FILE_RELAY_CAPABILITY, REMOTE_EXECUTION_CAPABILITY, ResidentExecutionProfile, ResidentProfileDescriptor
 from loom.queue.local_daemon_runtime import prepare_managed_local_runtime_record
-from tests.integration.queue.test_agent_session_transport import _prepare_remote_producer_run, _fresh_remote_agent_root
+from tests.support.agent_sessions import _prepare_remote_producer_run, _fresh_remote_agent_root
 from tests.support.mutual_tls import certificate_fingerprint, mutual_tls_credentials
 
 

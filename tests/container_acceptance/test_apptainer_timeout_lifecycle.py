@@ -402,7 +402,7 @@ def test_resident_delayed_namespace_and_normal_peer(
     profile = replace(native, descriptor={"profile_id": "delayed-container"}, container={
         "kind": "apptainer", "container": {"image": {"reference": runtime[1]}},
         "options": {"command": str(wrapper)},
-        "python_executable": "/opt/rphys/venv/bin/python", "daemon_endpoint": None,
+        "python_executable": "/bin/sh", "daemon_endpoint": None,
     })
 
     def command(launch):
@@ -476,7 +476,7 @@ def test_stranded_namespace_operator_recovery_preserves_peer(runtime, tmp_path, 
     agent.mkdir()
     profile = replace(_sleeping_profile(tmp_path), container={
         "kind": "apptainer", "container": {"image": {"reference": runtime[1]}},
-        "options": {"command": runtime[0]}, "python_executable": "/opt/rphys/venv/bin/python",
+        "options": {"command": runtime[0]}, "python_executable": "/bin/sh",
         "daemon_endpoint": None,
     })
     configuration = SupervisorLaunchConfiguration("agent-A", (profile,))

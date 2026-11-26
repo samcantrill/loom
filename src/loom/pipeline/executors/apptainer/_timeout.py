@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
-import re
 import select
 import signal
 import subprocess
@@ -20,7 +19,7 @@ from time import monotonic, sleep
 from typing import BinaryIO, Mapping, Sequence
 
 from loom import _pidfd
-from loom._apptainer_guard import VERSION as _GUARD_VERSION
+from loom._container_timeout_support import QUALIFIED_COMMANDS, supports_timeout
 
 from .build import MAX_APPTAINER_OUTPUT_CHARS, ApptainerOptionError
 
@@ -101,20 +100,10 @@ def _require_runtime(command: str, deadline: float, *, host_environment: Mapping
         check=False,
         env=host_environment,
     )
-    if (
-        version.returncode != 0
-        or (
-            version.stdout.strip() != _GUARD_VERSION
-            and re.fullmatch(
-                r"singularity(?:-ce)? version (?:3\.10\.4(?:-focal)?|4\.1\.(?:1|5))\s*",
-                version.stdout,
-            )
-            is None
-        )
-    ):
+    if version.returncode != 0 or not supports_timeout(version.stdout):
         raise UnsupportedTimeoutError(
-            "container timeout cleanup is currently verified for SingularityCE 3.10.4, 4.1.1 or 4.1.5 "
-            "foreground exec, or loom-apptainer-guard version 1; select a qualified command or "
+            f"container timeout cleanup is currently verified for {QUALIFIED_COMMANDS}; "
+            "select a qualified command or "
             "explicitly disable the timeout"
         )
 

@@ -18,15 +18,12 @@ environment style is supported and Loom never creates or updates it while
 checking or running a stage:
 
 ```sh
-# From the Loom checkout (not this example subdirectory), choose one style.
+# Run from the Loom checkout.
 uv sync --locked --no-dev --extra config
 . .venv/bin/activate
-# Alternatively, using pip from a Python 3.12 virtualenv:
-# python3.12 -m venv .venv
-# . .venv/bin/activate
-# python -m pip install 'weave @ git+https://github.com/samcantrill/weave.git@388377b61cffbb225057082365f03cb0738996fd'
-# python -m pip install -e '.[config]'
 ```
+
+For pip, follow the [checkout installation instructions](../../../docs/downstream-installation.md#installing-a-checkout-with-pip).
 
 The automatic demo below creates a fresh temporary deployment; it does not use
 previously edited machine files. It runs a CPU stage, verifies its relayed JSON report on the

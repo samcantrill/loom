@@ -14,9 +14,14 @@ from loom.queue.errors import QueueConflictError
 def recovery(tmp_path, monkeypatch):
     operation = object.__new__(upgrades._Upgrade)
     operation.directory = tmp_path
+    operation.deadline = None
     operation.receipts = tmp_path / "steps"
     operation.inventory = SimpleNamespace(path=tmp_path / "fleet.json")
-    operation.intent = {"kind": "runtime-upgrade", "operation_id": "upgrade", "agents": {"worker": {"drained": False}}}
+    operation.intent = {
+        "kind": "runtime-upgrade", "operation_id": "upgrade",
+        "agents": {"worker": {"drained": False, "session_id": "session"}},
+        "hosts": {"worker": {"expected_root_id": "worker-root"}},
+    }
     key = "worker-checks-capacity"
     directory = operation.receipts / key
     protected_directory(directory)
@@ -49,17 +54,20 @@ def recovery(tmp_path, monkeypatch):
                 raise OSError("lost applied control reply")
         return observe(value.operation_id)
 
-    def verify(name, expected):
-        if state.latest != expected:
-            raise QueueConflictError("independent native policy edit")
-        return {"drained": state.drained, "session_id": "session", "config_revision": state.config}
+    def observe_agent(name):
+        assert name == "worker"
+        return SimpleNamespace(availability="available", freshness="current", value={
+            "drained": state.drained, "session_id": "session", "config_revision": state.config,
+            "agent_root_id": "worker-root", "control": {"operation_id": state.latest},
+        })
 
-    monkeypatch.setattr(operation, "operator", SimpleNamespace(observe_control=observe, control_agent=control), raising=False)
+    monkeypatch.setattr(operation, "operator", SimpleNamespace(
+        observe_control=observe, control_agent=control, observe_agent=observe_agent,
+    ), raising=False)
     monkeypatch.setattr(operation, "recheck", lambda: None)
     monkeypatch.setattr(operation, "gate", lambda: {"checks": {}}, raising=False)
     monkeypatch.setattr(operation, "settled", lambda: None, raising=False)
     operation.host_observe = lambda *a, **k: {"availability": "available", "value": {"settled": state.settled}}
-    operation.verify_policy = verify
     monkeypatch.setattr(operation, "maintenance", lambda *a: None)
 
     def continuation(op):
