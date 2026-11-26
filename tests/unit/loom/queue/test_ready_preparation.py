@@ -248,8 +248,8 @@ def test_promote_running_build_while_peer_uses_other_worker(monkeypatch):
     key = ("run", "work")
     entered, release, peer, complete = Event(), Event(), Event(), Event()
     milestones = []
-    def record(action, **attrs):
-        milestones.append((action, attrs))
+    def record(action, *, details, **attrs):
+        milestones.append((action, {**details, **attrs}))
     monkeypatch.setattr("loom.queue._ready_preparation.milestone", record)
     pool = ReadyPreparationPool(lambda: None, on_ready=lambda owner: complete.set() if owner == "work-1" else None)
 
@@ -275,8 +275,11 @@ def test_promote_running_build_while_peer_uses_other_worker(monkeypatch):
         assert [action for action, _ in milestones] == [
             "request_preparation_queued", "request_preparation_worker_started", "worker_request_available",
         ]
-        assert all(attrs == {"stage_work_id": "work-1", "attempt_id": "try-1", "admission_id": "admission",
-                             "run_uri": "run", "stage_name": "work"} for _, attrs in milestones)
+        identity = {"stage_work_id": "work-1", "attempt_id": "try-1", "admission_id": "admission",
+                    "run_uri": "run", "stage_name": "work", "request_queued_ns": milestones[0][1]["request_queued_ns"]}
+        assert [attrs for _, attrs in milestones] == [
+            identity, identity, {**identity, "request_available_ns": pool.request_available_ns(key, "work-1")},
+        ]
         pool.discard(key)
         assert pool.request_available_ns(key, "work-1") is None
     finally:

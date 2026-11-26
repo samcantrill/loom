@@ -144,15 +144,39 @@ lower bound because the selector does not probe every possible placement for
 measurement. A missing observation is reported as unknown. These measurements
 use the normal scheduling decisions and the bounded diagnostic writer.
 
-For a single-stage workload, run
-`python tools/startup_timings.py CLIENT_LOG COORDINATOR_LOG AGENT_LOG` with
-all participating logs. The report joins submission, admission, assignment and
-worker events, reports nearest-rank p50, p95 and maximum times in seconds, and
-counts unlinked evidence. It distinguishes the preparation child from the
-first target entry. Same-process spans use the monotonic clock. Cross-process
-differences use UTC, with uncertainty unknown unless an independently measured
-per-clock error bound is supplied using `--clock-error-ms`. A stalled or full
-diagnostic writer may omit events. Its records carry cumulative omission counts.
+For a single-stage workload, supply client, coordinator, agent and supervisor
+logs from one deployment to the offline report:
+
+```bash
+python tools/startup_timings.py client.log coordinator.log agent.log supervisor.log --slowest 5
+python tools/startup_timings.py client.log coordinator.log agent.log supervisor.log --operation run-17
+```
+
+The default includes up to ten submissions ordered by time from acknowledgement
+to first target entry. Unmeasured submissions sort last. Select a run operation
+or a direct submission's queue item to see its individual timeline. The
+population distributions still include all supplied operations. The report
+computes each interval within its placement before calculating nearest-rank
+p50, p95 and maximum in seconds. Each distribution counts missing evidence.
+
+Preparation and target rows separately identify the admission, stage work,
+attempt, observed READY projection and assigned projection/assignment.
+Intervals cover admission to observed READY, dispatch of the request builder,
+its queue and IO time, placement, agent receipt, supervisor launch and guest
+entry. A reused request can predate a reopened projection. In that case
+`request_queued_before_this_ready` is true and its queue/build phases are
+null. The placement wait still starts when those request bytes became
+available. Wait-reason seconds describe the observed scheduling cycle. The
+confirmed eligible time measures only overlap with the completed request.
+
+The handoff connects the specific preparation child's return to the committed
+prepared-target receipt and target admission. A lost diagnostic, older guest,
+or ambiguous older retry can leave an interval null. Same-process intervals
+use monotonic time. Cross-process intervals use UTC and carry a null uncertainty
+unless an independently established per-clock bound is supplied with
+`--clock-error-ms`. Each UTC difference then has twice that bound. Compare
+individual timelines when investigating the tail, since different submissions
+can contribute each phase's p95.
 
 All dependency-ready unassigned `PENDING` attempts in the bounded window may be
 projected; they consume no `max_parallel_stages` slot. The coordinator
