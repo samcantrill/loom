@@ -2874,6 +2874,10 @@ class LocalDaemon:
             if isinstance(other, PendingContext):
                 other.discard("run_observation_preferred")
             prepared[identity] = observation
+        # The physical slot was released by completed(). Let its next owner
+        # load concurrently with the scheduler applying the drained results.
+        from ._coordinator_run_progress import retry_dispatch_context
+        retry_dispatch_context(execution, epochs)
         waiting_outcomes: dict[str, LocalDaemonExecutionOutcome] = {}
         for preparation in sorted(prepared.values(), key=lambda item: AdmissionScan.key(item.admission)):
             admission = preparation.admission
@@ -2970,9 +2974,8 @@ class LocalDaemon:
         # The durable ready query owns the 256-item window.  A cycle may
         # launch at most that many assignments, but a larger pipeline is
         # never rejected merely for having more stages.
-        from ._coordinator_run_progress import resume_ready_inputs, retry_dispatch_context
+        from ._coordinator_run_progress import resume_ready_inputs
         from ._ready_window import ScanYield
-        retry_dispatch_context(execution, epochs)
         resume_ready_inputs(execution, execution._ready_continuations.take(), schedulable, epochs)
         started_admissions: set[str] = set()
         with bulk.visiting(schedulable.visited_dispatch):

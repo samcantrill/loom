@@ -29,7 +29,7 @@ from ._phase_timing import phase
 if TYPE_CHECKING:
     from loom.pipeline.orchestration import ManagedExecutionRequirement, SQLiteStageWorkStore, StageWorkRecord
     from loom.pipeline.stores.read_models import AuthoritativeRunSnapshot
-    from ._context_preparation import PreparedAdmissionContext
+    from ._context_preparation import DispatchContextRetry, PreparedAdmissionContext
     from ._coordinator_run_authority import _ScopedCoordinatorAuthority
     from .local_daemon import LocalDaemonAdmission
     from .local_daemon_execution import LocalDaemonExecution, ManagedLocalIntent
@@ -413,7 +413,8 @@ def _disabled_slurm_routes(self):
 
 def _dispatch_route_enabled(record, disabled_routes):
     route = record.placement.route
-    return route.kind is not ExecutionRouteKind.SLURM or (route.profile_id, route.profile_configuration_fingerprint) not in disabled_routes
+    return (route.kind is not ExecutionRouteKind.SLURM
+            or (route.profile_id, route.profile_configuration_fingerprint) not in disabled_routes)
 
 
 def retry_dispatch_context(self: LocalDaemonExecution, epochs) -> None:
@@ -422,17 +423,29 @@ def retry_dispatch_context(self: LocalDaemonExecution, epochs) -> None:
 
     daemon = self._daemon_owner()
 
-    def needed(admission: LocalDaemonAdmission, work_id: str) -> bool:
+    def needed(admission: LocalDaemonAdmission, retry: DispatchContextRetry) -> bool | None:
         if self.continuation_context(admission, epochs) is not None or self.run_observations.awaiting_read(
             admission, epochs, daemon._result_verifications.bulk,
         ):
             return False
-        record = self.stage_work_store.find_stage_work(work_id)
-        if record is None or record.scheduling_state is not SchedulingProjectionState.READY:
-            return False
-        if record.placement.route.kind is ExecutionRouteKind.SLURM and not _dispatch_route_enabled(record, _disabled_slurm_routes(self)):
-            return False
-        return not self._attempt_cancel_requested(record.run_uri, record.attempt_id)
+        disabled = _disabled_slurm_routes(self)
+        record = self.stage_work_store.find_stage_work(retry.work_id)
+        if (record is not None and record.scheduling_state is SchedulingProjectionState.READY
+            and _dispatch_route_enabled(record, disabled)
+            and not self._attempt_cancel_requested(record.run_uri, record.attempt_id)):
+            return True
+
+        # Ownership is per admission revision. Losing one producer or witness
+        # need not cancel the siblings sharing this context.
+        from ._action_results import launchable_page
+        page, after = self.stage_work_store.ready_siblings(admission.admission_id, retry.sibling_after)
+        others = tuple(r for r in page if r.stage_work_id != retry.work_id and _dispatch_route_enabled(r, disabled))
+        if others:
+            with self.config.connect_database(self.config.control_database) as conn:
+                if launchable_page(conn, others):
+                    return True
+        retry.sibling_after = after
+        return False if after is None else None
 
     daemon._contexts.retry_dispatch(epochs, daemon._lookup_schedulable_admissions, needed, self.prepare_admission_context)
 
@@ -521,8 +534,11 @@ def _schedule_window(
                     continue
                 if not daemon._contexts.try_submit(admission, epochs, self.prepare_admission_context, dispatch_work_id=work_id):
                     break
+        # A refused load can end this pass before later retained rows are
+        # visited. Every context exposed to placement still needs both fences.
         admissions = {key: value for key, value in admissions.items()
-                      if self._cycle_context_epochs.get(key) == epochs}
+                      if self._cycle_context_epochs.get(key) == epochs
+                      and self._cycle_context_revisions.get(key) == value.revision}
     contexts = self._cycle_contexts
     exhausted_admissions: set[str] = set()
     active_counts: dict[str, int] = {}

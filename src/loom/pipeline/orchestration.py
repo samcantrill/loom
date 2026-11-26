@@ -802,6 +802,25 @@ class SQLiteStageWorkStore:
                 (json.dumps(tuple(stage_work_ids)),),
             )}
 
+    def ready_siblings(
+        self, admission_id: str, after: tuple[str, str, str] | None, *, limit: int = 32,
+    ) -> tuple[tuple[StageWorkRecord, ...], tuple[str, str, str] | None]:
+        """Inspect one indexed page of an admission's projections after its READY witness retires."""
+        _validate_ready_window_limit(limit)
+        suffix = " AND (stage_name,attempt_id,readiness_generation) > (?,?,?)" if after is not None else ""
+        with self._read_connection() as conn:
+            rows = conn.execute(
+                "SELECT stage_name,attempt_id,readiness_generation,"
+                " CASE WHEN scheduling_state='ready' THEN record_json END FROM stage_work WHERE admission_id=?"
+                + suffix + " ORDER BY stage_name,attempt_id,readiness_generation LIMIT ?",
+                (admission_id, *(after or ()), limit + 1),
+            ).fetchall()
+        # Bound history examined as well as JSON decoded. The unique admission /
+        # stage / attempt / generation index supplies this order on schema 19.
+        page = rows[:limit]
+        cursor = (page[-1][0], page[-1][1], page[-1][2]) if len(rows) > limit else None
+        return tuple(_decode_stage_work(row[3]) for row in page if row[3] is not None), cursor
+
     def find_stage_work(self, stage_work_id: str) -> StageWorkRecord | None:
         """Read the selected durable record without materializing the ready backlog."""
         with self._read_connection() as conn:

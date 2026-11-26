@@ -22,11 +22,12 @@ type PreparedAdmissionContext = tuple["ManagedLocalIntent", "_ScopedCoordinatorA
 type ContextLoader = Callable[["LocalDaemonAdmission", tuple[str | None, str | None]], PreparedAdmissionContext]
 
 
-@dataclass(frozen=True, slots=True)
-class _DispatchRetry:
+@dataclass(slots=True)
+class DispatchContextRetry:
     admission: LocalDaemonAdmission
     epochs: tuple[str | None, str | None]
     work_id: str
+    sibling_after: tuple[str, str, str] | None = None
 
 
 @dataclass
@@ -69,7 +70,7 @@ class ContextPreparations:
         self._workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="loom-context")
         self._pending: dict[str, PendingContext] = {}
         self._wake = wake
-        self._dispatch_retries: dict[str, _DispatchRetry] = {}
+        self._dispatch_retries: dict[str, DispatchContextRetry] = {}
         self._next_load: dict[str, tuple[int, tuple[str | None, str | None], float, str]] = {}
         self._interval = 0.0
         self._tracing = qualification_timings()
@@ -130,10 +131,12 @@ class ContextPreparations:
                 self._waiting.popitem(last=False)[1].discard("request", "observation_limit")
         return timing
 
-    def _remember_dispatch(self, retry: _DispatchRetry) -> bool:
+    def _remember_dispatch(self, retry: DispatchContextRetry) -> bool:
         identity = retry.admission.admission_id
-        if identity in self._dispatch_retries:
-            return False  # Repeated visits keep the original FIFO position.
+        existing = self._dispatch_retries.get(identity)
+        if existing is not None:
+            existing.work_id = retry.work_id  # Refresh the witness without moving the waiter.
+            return False
         if len(self._dispatch_retries) >= self._retry_limit:
             # Keep older equal-priority demand. Displaced work remains in READY.
             newest_lowest = min(reversed(self._dispatch_retries.values()), key=lambda r: r.admission.run_priority)
@@ -146,7 +149,7 @@ class ContextPreparations:
     def retry_dispatch(
         self, epochs: tuple[str | None, str | None],
         lookup: Callable[[set[str]], Mapping[str, LocalDaemonAdmission]],
-        needed: Callable[[LocalDaemonAdmission, str], bool], load: ContextLoader,
+        needed: Callable[[LocalDaemonAdmission, DispatchContextRetry], bool | None], load: ContextLoader,
     ) -> None:
         """Give the next live waiter the freed dispatch slot, in priority/FIFO order."""
         if not self._dispatch_retries or not self.has_capacity() or any(p.for_dispatch for p in self._pending.values()):
@@ -166,13 +169,17 @@ class ContextPreparations:
                 reason = "admission_unschedulable"
             elif retry.admission.revision != admission.revision:
                 reason = "admission_revision_changed"
-            elif not needed(admission, retry.work_id):
-                reason = "dispatch_no_longer_needed"
             else:
-                if self._tracing:
-                    self._request_timing(admission, epochs, source="dispatch", wait_reason="available", reuse=False)
-                self._start(admission, epochs, load, for_dispatch=True, continuation=None)
-                return
+                useful = needed(admission, retry)
+                if useful is None:
+                    self._wake()  # More sibling evidence; preserve this waiter's turn.
+                    return
+                if useful:
+                    if self._tracing:
+                        self._request_timing(admission, epochs, source="dispatch", wait_reason="available", reuse=False)
+                    self._start(admission, epochs, load, for_dispatch=True, continuation=None)
+                    return
+                reason = "dispatch_no_longer_needed"
             del self._dispatch_retries[identity]
             timing = self._waiting.pop(identity, None)
             if timing is not None:
@@ -216,7 +223,7 @@ class ContextPreparations:
                                  wait_reason=wait_reason, reuse=continuation is not None)
         if wait_reason != "available":
             if dispatch_work_id is not None:
-                added = self._remember_dispatch(_DispatchRetry(admission, epochs, dispatch_work_id))
+                added = self._remember_dispatch(DispatchContextRetry(admission, epochs, dispatch_work_id))
                 if added and wait_reason == "dispatch_retry_pending":
                     self._wake()  # The new waiter arrived after this turn serviced retries.
             return pending is not None
