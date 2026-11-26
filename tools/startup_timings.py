@@ -119,6 +119,8 @@ class Trace:
             for span in spans:
                 if span.get("action") in _BULK_PHASES and operation and span.get("operation_id") == operation:
                     child = (record.get("related") or {}).get("child_admission_id")
+                    if child:
+                        self.admissions[child] = operation, "preparation"
                     wait = waits[0]["elapsed_nanoseconds"] / 1e9 if len(waits) == 1 else None
                     row = {"action": span["action"], "child_admission_id": child, "started_at": span["started_at"],
                            "worker_seconds": span["elapsed_nanoseconds"] / 1e9, "outcome": span["outcome"],
@@ -165,6 +167,11 @@ class Trace:
 def _request(events, reserved, single_cycle):
     """A rebuilt request and a request carried into a reopened reservation have distinct observations."""
     available = events.get("worker_request_available", [])
+    if reserved and not reserved.attrs.get("assignment_id") and reserved.attrs.get("prequeue_queued_ns") is not None:
+        token = reserved.attrs["prequeue_queued_ns"]
+        return {action: _unique(e for e in events.get(action, ())
+                                if e.domain == reserved.domain and e.attrs.get("request_queued_ns") == token)
+                for action in _REQUEST}
     if reserved and "request_available_ns" in reserved.attrs:
         stamp = reserved.attrs["request_available_ns"]
         finished = _unique(e for e in available if stamp is not None and e.domain == reserved.domain
@@ -220,10 +227,15 @@ def _attempt(trace, key, assignment, assigned, ready, single_cycle, error_ms):
     waits = s.get("wait_ns")
     prequeue = s.get("prequeue_status", "missing")
     selected_queue_ns = s.get("prequeue_queued_ns")
-    if prequeue == "observed" and (selected_queue_ns is None or build is None or summary is None
-                                   or build.domain != summary.domain or selected_queue_ns != queued_ns):
+    if prequeue == "observed" and (selected_queue_ns is None or (assignment is not None and (
+            build is None or summary is None or build.domain != summary.domain or selected_queue_ns != queued_ns))):
         prequeue = "missing"
     prequeue_waits = s.get("prequeue_wait_ns") if prequeue == "observed" else None
+    if prequeue_waits is not None and s.get("prequeue_ready_ns") is not None:
+        # Use the two transition stamps also measured by the reason counters.
+        # The separate log records can be emitted later after a thread pause.
+        intervals["ready_to_request_queued"] = {"seconds": (selected_queue_ns - s["prequeue_ready_ns"]) / 1e9,
+                                                "clock": "monotonic", "uncertainty_seconds": 0}
     return {
         "admission_id": admission, "stage_work_id": work_id, "attempt_id": attempt, "assignment_id": assignment,
         "stage_name": r.get("stage_name") or s.get("stage_name") or (ready.attrs.get("stage_name") if ready else None),
@@ -272,15 +284,23 @@ def _attempts(trace, error_ms):
             if ready is not None:
                 matched.append(ready)
             yield _attempt(trace, key, identity, assigned, ready, single_cycle, error_ms)
+        closures = trace.work.get(key, {}).get("attempt_scheduling_summary", ())
+        matched_closures = []
         for ready in ready_events:
             if ready not in matched:
                 matched.append(ready)
-                closed = _unique(e for e in trace.work[key].get("attempt_scheduling_summary", ())
+                closed = _unique(e for e in closures
                                  if e.domain == ready.domain and
                                  e.attrs.get("ready_projection_revision") == ready.attrs.get("projection_revision"))
+                if closed is not None:
+                    matched_closures.append(closed)
                 details = {"attempt_scheduling_summary": [closed]} if closed else {}
                 yield _attempt(trace, key, None, details, ready, single_cycle, error_ms)
-        if not placements and not ready_events:
+        for closed in closures:
+            if closed not in matched_closures and closed.attrs.get("ready_projection_revision") is not None:
+                matched_closures.append(closed)
+                yield _attempt(trace, key, None, {"attempt_scheduling_summary": [closed]}, None, single_cycle, error_ms)
+        if not placements and not ready_events and not matched_closures:
             yield _attempt(trace, key, None, {}, None, single_cycle, error_ms)
 
 
@@ -304,9 +324,13 @@ def _handoff(trace, op, attempts, targets, error_ms):
         rows.append(row)
     if not rows and isinstance(op, str) and op not in trace.prepare_only:
         children = {a["admission_id"] for a in attempts["preparation"]}
-        rows.append({"child_admission_id": next(iter(children)) if len(children) == 1 else None,
+        child = next(iter(children)) if len(children) == 1 else None
+        returns = [e for a in attempts["preparation"] if a["admission_id"] == child
+                   for e in trace.assignments.get(a["assignment_id"], {}).get("stage_run_returned", ())]
+        row_events = {"stage_run_returned": _unique(returns), "admission_succeeded": _unique(trace.succeeded.get(child, ()))}
+        rows.append({"child_admission_id": child,
                      "target_admission_id": targets[0] if len(targets) == 1 else None,
-                     "intervals": _measure({}, _HANDOFF, error_ms)})
+                     "intervals": _measure(row_events, _HANDOFF, error_ms)})
     return rows
 
 
@@ -331,7 +355,7 @@ def summarize(records, *, clock_error_ms=None, slowest=10, operation=None):
             targets[op].append(admission)
         if admission not in observed_admissions:
             grouped[op][role].append(_attempt(trace, (admission, None, None), None, {}, None, True, clock_error_ms))
-    operations = list(dict.fromkeys([*trace.client, *(op for op, _ in trace.admissions.values()), *trace.prepared]))
+    operations = list(dict.fromkeys([*trace.client, *(op for op, _ in trace.admissions.values()), *trace.prepared, *trace.bulk]))
     durations, send_times, reports = [], [], []
     handoff_samples = []
     phase_samples = defaultdict(list)

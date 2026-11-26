@@ -112,6 +112,12 @@ def test_selected_timeline_links_the_publishing_child_and_both_clock_domains():
     child = next(a for a in partial["attempts"]["preparation"] if a["admission_id"] == "child")
     assert child["assignment_id"] == "ca"
     assert child["intervals"]["admission_to_ready"] is None
+    # A dropped commit cannot hide the independently joined child return/success.
+    no_commit = [r for r in records if r["spans"][0]["action"] != "prepared_target_committed"
+                 and r["spans"][0]["attributes"].get("admission_id") != "earlier-child"]
+    partial, = summarize(no_commit)["submissions"]
+    assert partial["handoffs"][0]["intervals"]["child_return_to_admission_succeeded"]["seconds"] == 2
+    assert partial["handoffs"][0]["intervals"]["child_admission_succeeded_to_prepared_target_commit"] is None
 
 
 def test_reopened_attempt_reuses_only_its_exact_request_and_missing_evidence_stays_unknown():
@@ -240,6 +246,7 @@ def test_prequeue_observations_belong_to_the_selected_build_and_bulk_keeps_retri
     report, = result["submissions"]
     target, = report["attempts"]["target"]
     assert target["prequeue_wait_seconds"] == {"first_scan": 2e-9}
+    assert target["intervals"]["ready_to_request_queued"]["seconds"] == 2e-9
     assert result["prequeue_distributions"]["target"]["coverage"] == {"observed": 1}
     assert [(r["outcome"], r["child_admission_id"], r["capacity_wait_seconds"], r["worker_seconds"])
             for r in report["observed_preparation_work"]] == [("error", "earlier", 3, .25), ("complete", "chosen", 3, .25)]
@@ -248,3 +255,29 @@ def test_prequeue_observations_belong_to_the_selected_build_and_bulk_keeps_retri
     changed, = summarize(records)["submissions"]
     assert changed["attempts"]["target"][0]["prequeue_status"] == "missing"
     assert changed["attempts"]["target"][0]["prequeue_wait_seconds"] is None
+    legacy = bulk("complete", 9, None)
+    del legacy["related"]
+    old, = summarize([legacy], operation="r")["submissions"]
+    assert old["observed_preparation_work"][0]["child_admission_id"] is None
+    assert old["observed_preparation_work"][0]["worker_seconds"] == .25
+
+
+def test_unassigned_closures_keep_unknown_and_measured_placement_coverage():
+    key = dict(admission_id="a", stage_work_id="w", attempt_id="attempt")
+    rows = [
+        _event("admission_committed", 1, op="r", role="target", admission_id="a"),
+        _event("attempt_ready", 2, ns=6, projection_revision=1, work=key),
+        _event("request_preparation_queued", 4, ns=12, request_queued_ns=9, work=key),
+        _event("request_preparation_worker_started", 5, ns=14, request_queued_ns=9, work=key),
+        _event("attempt_scheduling_summary", 6, ns=20, work=key, ready_projection_revision=1, result="left_ready",
+               request_available_ns=None, prequeue_ready_ns=2, prequeue_queued_ns=9,
+               prequeue_wait_ns={"context_unavailable": 7}, prequeue_status="observed"),
+        _event("attempt_scheduling_summary", 7, ns=30, work=key, ready_projection_revision=3, result="left_ready",
+               prequeue_status="inapplicable", prequeue_wait_ns=None),
+    ]
+    result = summarize(rows)
+    observed, inapplicable = result["submissions"][0]["attempts"]["target"]
+    assert observed["assignment_id"] is None and inapplicable["assignment_id"] is None
+    assert observed["intervals"]["ready_to_request_queued"]["seconds"] == 7e-9
+    assert observed["intervals"]["request_worker_queue"]["seconds"] == 2e-9
+    assert result["prequeue_distributions"]["target"]["coverage"] == {"observed": 1, "inapplicable": 1}
