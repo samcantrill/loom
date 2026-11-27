@@ -603,6 +603,8 @@ def test_released_history(root):
         assert after["requested_gpu_count"] is None
         assert after["capability_delivery_kind"] is None
         assert after["capability_expires_at"] is None
+        assert any(row[1] == "slurm_invalid_assignment_evidence"
+                   for row in conn.execute("PRAGMA index_list(slurm_stage_assignments)"))
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("UPDATE slurm_stage_assignments SET state='running'")
     SlurmSubmissionProjection(fixture.path, schema_version=4)._open_existing()
