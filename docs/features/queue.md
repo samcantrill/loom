@@ -250,6 +250,8 @@ loader demand is retained even when the stage initially reused context.
 The demand, first usable visit and first observed progress each identify their
 own load when qualification timing is enabled. The process clock domain,
 admission ID, revision, epochs and request ID identify a load across log files.
+`demand_install_to_stage_revisit` measures the first revisit using the exact
+load the stage requested, including demand after an earlier context was reused.
 The install-to-progress interval ends at the first observed request enqueue or
 placement selection for this attempt, using the context for that transition.
 A context installed before this READY cycle, a superseded demand or a missing

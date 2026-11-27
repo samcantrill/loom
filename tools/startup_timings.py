@@ -28,7 +28,8 @@ _PHASES = {
     "supervisor_to_stage_run": ("supervisor_launch", "stage_run_entered"),
 }
 _STAGE_CONTEXT_PHASES = ("ready_to_first_scan", "first_scan_to_context_interest", "context_demand_to_install",
-                         "context_install_to_stage_visit", "context_install_to_stage_progress")
+                         "demand_install_to_stage_revisit", "context_install_to_stage_visit",
+                         "context_install_to_stage_progress")
 _HANDOFF = {
     "child_return_to_prepared_target_commit": ("stage_run_returned", "prepared_target_committed"),
     "child_return_to_admission_succeeded": ("stage_run_returned", "admission_succeeded"),
@@ -238,6 +239,7 @@ def _stage_context_intervals(summary):
         "ready_to_first_scan": interval(ready, scan),
         "first_scan_to_context_interest": interval(scan, interest),
         "context_demand_to_install": interval(fields.get("demand_ns"), fields.get("demand_installed_ns")),
+        "demand_install_to_stage_revisit": interval(fields.get("demand_installed_ns"), fields.get("demand_visit_ns")),
         "context_install_to_stage_visit": interval(install, fields.get("visit_ns")),
         "context_install_to_stage_progress": interval(fields.get("progress_installed_ns"), fields.get("progress_ns")),
     }

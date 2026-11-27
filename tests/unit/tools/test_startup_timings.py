@@ -375,7 +375,7 @@ def test_context_timeline_matches_installation_and_first_target_entry_per_admiss
     key = dict(admission_id="a", stage_work_id="w", attempt_id="attempt")
     identity = {"context_request_id": 1, "admission_revision": 2, "coordinator_epoch": "c", "scheduling_epoch": "s"}
     fields = dict(first_scan_ns=3, interest_ns=5, installed_ns=8, visit_ns=9, progress_ns=10,
-                  demand_load=identity, used_load=identity, demand_ns=5, demand_installed_ns=8, progress_installed_ns=8)
+                  demand_load=identity, used_load=identity, demand_ns=5, demand_installed_ns=8, demand_visit_ns=11, progress_installed_ns=8)
     records = [
         _event("admission_committed", 1, op="op", ns=1, role="target", admission_id="a"),
         _event("attempt_ready", 2, ns=2, projection_revision=1, work=key),
@@ -388,6 +388,7 @@ def test_context_timeline_matches_installation_and_first_target_entry_per_admiss
     phases = result["phase_distributions"]["target"]
     assert [phases[k]["p50"] for k in ("ready_to_first_scan", "first_scan_to_context_interest", "context_demand_to_install",
                                        "context_install_to_stage_visit", "context_install_to_stage_progress")] == [1e-9, 2e-9, 3e-9, 1e-9, 2e-9]
+    assert phases["demand_install_to_stage_revisit"]["p50"] == 3e-9
     assert result["target_admission_to_first_stage_entry"]["unknown"] == 1
     assert result["first_target_admission_to_last_first_entry"] is None
     fields.pop("demand_installed_ns")  # A superseding load supplied the first usable context.
@@ -396,5 +397,6 @@ def test_context_timeline_matches_installation_and_first_target_entry_per_admiss
     result = summarize(records[:-1])
     phases = result["phase_distributions"]["target"]
     assert phases["context_demand_to_install"]["samples"] == phases["context_install_to_stage_progress"]["samples"] == 0
+    assert phases["demand_install_to_stage_revisit"]["unknown"] == 1
     assert result["target_admission_to_first_stage_entry"]["p50"] == 12
     assert result["first_target_admission_to_last_first_entry"]["seconds"] == 12
