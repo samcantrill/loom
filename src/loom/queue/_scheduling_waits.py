@@ -13,6 +13,7 @@ from ._phase_timing import milestone
 
 if TYPE_CHECKING:
     from loom.pipeline.orchestration import StageWorkRecord
+    from ._context_timing import ContextTiming
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +76,7 @@ class _Attempt:
     expires_ns: int = 0
     eligible_request_ready_ns: int = 0
     saw_eligible_offer: bool = False
+    stage_context: dict[str, PlainData] = field(default_factory=dict)
 
     def transition(self, reason: str, now: int) -> None:
         if self.boundary != reason:
@@ -116,8 +118,11 @@ class SchedulingWaits:
                 if record.projection_revision < previous.ready_revision:
                     return
                 previous.projection_revision = max(previous.projection_revision, record.projection_revision)
-                if scanned and previous.prequeue.reason == "first_scan":
-                    previous.prequeue.wait("unknown", monotonic_ns())
+                if scanned and "first_scan_ns" not in previous.stage_context:
+                    now = monotonic_ns()
+                    previous.stage_context["first_scan_ns"] = now
+                    if previous.prequeue.reason == "first_scan":
+                        previous.prequeue.wait("unknown", now)
                 return
             if (record.stage_work_id, record.projection_revision) in self._finished:
                 return
@@ -127,12 +132,62 @@ class SchedulingWaits:
             self._attempts[key] = _Attempt(record.stage_work_id, record.projection_revision,
                                            record.projection_revision, record.attempt_id,
                                            record.admission_id, "capacity_unknown", now,
-                                           _Prequeue(now, now, "unknown" if scanned else "first_scan"), record.ready_at)
+                                           _Prequeue(now, now, "unknown" if scanned else "first_scan"), record.ready_at,
+                                           stage_context={"first_scan_ns": now} if scanned else {})
             if len(self._attempts) > self._limit:
                 self._finish(next(iter(self._attempts)), "observation_evicted", None)
         milestone("attempt_ready", stage_work_id=record.stage_work_id, attempt_id=record.attempt_id,
                   admission_id=record.admission_id, run_uri=record.run_uri, stage_name=record.stage_name,
                   ready_at=record.ready_at, projection_revision=record.projection_revision)
+
+    def _current_attempt(self, record: StageWorkRecord) -> _Attempt | None:
+        attempt = self._attempts.get((record.run_uri, record.stage_name))
+        if (attempt is not None and attempt.work_id == record.stage_work_id
+            and record.projection_revision >= attempt.ready_revision):
+            return attempt
+        return None
+
+    def context_demand(self, record: StageWorkRecord, kind: str, timing: ContextTiming | None) -> None:
+        with self._lock:
+            attempt = self._current_attempt(record)
+            if attempt is None or "demand_ns" in attempt.stage_context:
+                return
+            fields = attempt.stage_context
+            now = monotonic_ns()
+            fields.update(demand_ns=now, demand_kind=kind, demand_load=timing.identity() if timing else None)
+            if "interest_ns" not in fields:
+                fields.update(interest_ns=now, interest_kind=kind)
+
+    def context_visit(self, record: StageWorkRecord, timing: ContextTiming | None) -> None:
+        with self._lock:
+            attempt = self._current_attempt(record)
+            if attempt is None:
+                return
+            fields = attempt.stage_context
+            demand = fields.get("demand_load")
+            if (timing and isinstance(demand, dict) and "demand_visit_ns" not in fields
+                and demand["context_request_id"] == timing.request_id):
+                fields.update(demand_installed_ns=timing.installed_ns, demand_visit_ns=monotonic_ns())
+            if "visit_ns" in fields:
+                return
+            now = monotonic_ns()
+            if "interest_ns" not in fields:
+                fields.update(interest_ns=now, interest_kind="reused")
+            fields.update(visit_ns=now, used_load=timing.identity() if timing else None,
+                          installed_ns=timing.installed_ns if timing else None)
+
+    def context_progress(self, record: StageWorkRecord, timing: ContextTiming | None,
+                         kind: str, stamp: int | None = None) -> None:
+        with self._lock:
+            attempt = self._current_attempt(record)
+            if attempt is None or "progress_ns" in attempt.stage_context:
+                return
+            now = monotonic_ns() if stamp is None else stamp
+            if now < attempt.prequeue.ready_ns or (timing and timing.installed_ns and now < timing.installed_ns):
+                return  # A carried request belongs to its earlier context or READY cycle.
+            attempt.stage_context.update(progress_ns=now, progress_kind=kind,
+                                         progress_load=timing.identity() if timing else None,
+                                         progress_installed_ns=timing.installed_ns if timing else None)
 
     def prequeue(self, record: StageWorkRecord, reason: str) -> None:
         with self._lock:
@@ -209,7 +264,7 @@ class SchedulingWaits:
             "run_uri": key[0], "stage_name": key[1], "result": outcome,
             "eligible_request_ready_ns": attempt.eligible_request_ready_ns,
             "saw_eligible_offer": attempt.saw_eligible_offer, "wait_ns": dict(attempt.totals),
-            **attempt.prequeue.summary(outcome),
+            "stage_context": attempt.stage_context, **attempt.prequeue.summary(outcome),
         }
         identity = (attempt.work_id, attempt.projection_revision)
         self._finished[identity] = summary

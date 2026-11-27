@@ -2287,9 +2287,11 @@ class LocalDaemonExecution:
     def reconcile_admission(
         self, admission: LocalDaemonAdmission,
         *, prepared_intent: ManagedLocalIntent | None = None, prepared_context: PreparedAdmissionContext | None = None,
+        dispatch_work_id: str | None = None,
     ) -> LocalDaemonExecutionOutcome:
         """Reconcile one run into durable ready work without selecting capacity."""
-        return _run_progress.reconcile_admission(self, admission, prepared_intent=prepared_intent, prepared_context=prepared_context)
+        return _run_progress.reconcile_admission(self, admission, prepared_intent=prepared_intent,
+                                                 prepared_context=prepared_context, dispatch_work_id=dispatch_work_id)
 
 
     def _settled_terminal_outcome(
@@ -4252,6 +4254,9 @@ class LocalDaemonExecution:
             queued = self._ready_preparations.request_queued_ns(key, record.stage_work_id)
             if queued is not None:
                 self._scheduling_waits.queued(record, queued)
+                context = self._cycle_contexts.get(record.admission_id)
+                if context is not None:
+                    self._scheduling_waits.context_progress(record, timing_for(context), "request_queued", queued)
         if reason == "stage_preparation_capacity":
             self._scheduling_waits.prequeue(record, "preparation_capacity")
         elif reason == "stage_preparation_superseded":

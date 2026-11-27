@@ -221,6 +221,177 @@ def test_shared_producer_keeps_admission_order_when_previous_witness_loses_deman
         retry_dispatch_context(owner, epochs)
         pool._pending[original.admission_id].future.result(timeout=10)
         assert started == ["held", original.admission_id]
+        assert pool._pending[original.admission_id].dispatch_work_id == work_id("z")
     finally:
         gate.set()
+        pool.close()
+
+
+def test_discovery_inherits_one_dispatch_witness_without_consuming_dispatch_slot():
+    epochs = "owner", "policy"
+    pool = ContextPreparations(lambda: None)
+    gate = Event()
+    demand = []
+
+    def load(row, epochs):
+        assert gate.wait(5)
+        return cast(PreparedAdmissionContext, (object(), object()))
+
+    def observe(kind, timing):
+        demand.append(kind)
+
+    try:
+        assert pool.try_submit(_row("occupied"), epochs, load, dispatch_work_id="other")
+        assert not pool.try_submit(_row("run"), epochs, load, dispatch_work_id="stage-a", observe_demand=observe)
+        assert not pool.try_submit(_row("run"), epochs, load, dispatch_work_id="stage-b", observe_demand=observe)
+        assert pool.try_submit(_row("run"), epochs, load)  # Discovery services the refused demand.
+        assert pool.try_submit(_row("run"), epochs, load, dispatch_work_id="stage-c", observe_demand=observe)
+        item = pool._pending["run"]
+        assert not item.for_dispatch and item.dispatch_work_id == "stage-b"
+        assert demand == ["requested", "joined_waiter", "joined_pending"]
+        gate.set()
+        for item in pool._pending.values():
+            item.future.result(5)
+        pool.completed()
+        assert pool.try_submit(_row("another"), epochs, load)
+        assert pool.try_submit(_row("another"), epochs, load, dispatch_work_id="joined-first")
+        assert pool._pending["another"].dispatch_work_id == "joined-first"
+    finally:
+        gate.set()
+        pool.close()
+
+
+def test_installed_context_hints_exact_stage_even_when_run_observation_yields():
+    import pytest
+    from loom.queue._completion_inbox import CompletionInbox
+    from loom.queue._coordinator_run_progress import reconcile_admission
+    from loom.queue._run_observations import RunObservationPending
+
+    inbox = CompletionInbox[str](lambda: None)
+    row = _row("current")
+    ctx = cast(PreparedAdmissionContext, (object(), object()))
+
+    def awaiting_read(*args, dispatch_work_id):
+        retained.append(dispatch_work_id)
+        assert owner._cycle_contexts[row.admission_id] == ctx
+        raise RunObservationPending()
+
+    retained = []
+    observations = SimpleNamespace(snapshot_for_preparation=lambda *args: object())
+    owner: Any = SimpleNamespace(
+        daemon=SimpleNamespace(_epoch="coordinator", _scheduling_epoch="policy", _result_verifications=SimpleNamespace(bulk=None)),
+        _cycle_contexts={}, _cycle_context_epochs={}, _cycle_context_revisions={}, _ready_continuations=inbox,
+        run_observations=SimpleNamespace(advance=awaiting_read), dispatch_observations=observations,
+        _ready_preparations=SimpleNamespace(context_resume_step=lambda key: "snapshot"),
+    )
+    with pytest.raises(RunObservationPending):
+        reconcile_admission(owner, row, prepared_context=ctx, dispatch_work_id="exact-stage")
+    assert inbox.take() == ("exact-stage",)
+    with pytest.raises(RunObservationPending):
+        reconcile_admission(owner, row, prepared_context=ctx)
+    assert not inbox.take()
+    observations.snapshot_for_preparation = lambda *args: None
+    with pytest.raises(RunObservationPending):
+        reconcile_admission(owner, row, prepared_context=ctx, dispatch_work_id="awaiting-snapshot")
+    assert not inbox.take() and retained[-1] == "awaiting-snapshot"
+    owner.run_observations.advance = lambda *a, **kw: object()
+    owner._observed_ready = {row.admission_id: object()}
+    reconcile_admission(owner, row, prepared_context=ctx, dispatch_work_id=retained[-1])
+    assert inbox.take() == ("awaiting-snapshot",)
+    owner._ready_preparations.context_resume_step = lambda key: "owned"
+    reconcile_admission(owner, row, prepared_context=ctx, dispatch_work_id="already-queued")
+    assert not inbox.take()
+
+
+def test_consuming_ready_hint_rechecks_admission_changed_during_run_read(monkeypatch):
+    from loom.queue import _coordinator_run_progress as progress
+    from loom.queue._admission_scan import SchedulingAdmissions
+    from loom.queue._completion_inbox import CompletionInbox
+    from loom.queue._run_observations import RunObservationPending
+    from loom.queue._scheduling_waits import SchedulingWaits
+    import pytest
+
+    row = _row("run")
+    eligible = {row.admission_id: row}
+    admissions = SchedulingAdmissions(1, lambda ids: {i: eligible[i] for i in ids if i in eligible})
+    admissions.include({row.admission_id})  # Preloaded for the selected dispatch observation.
+    ctx = cast(PreparedAdmissionContext, (object(), object()))
+    record = SimpleNamespace(run_uri=row.run_uri, stage_name="stage", attempt_id="attempt", stage_work_id="work",
+                             projection_revision=1, ready_at=1, scheduling_state=SchedulingProjectionState.READY,
+                             admission_id=row.admission_id)
+    advanced = []
+
+    def pending(*args, **kwargs):
+        raise RunObservationPending()
+
+    owner: Any = SimpleNamespace(
+        daemon=SimpleNamespace(_epoch="c", _scheduling_epoch="s", _result_verifications=SimpleNamespace(bulk=None)),
+        _cycle_contexts={}, _cycle_context_revisions={}, _cycle_context_epochs={}, _ready_continuations=CompletionInbox[str](lambda: None),
+        run_observations=SimpleNamespace(advance=pending),
+        dispatch_observations=SimpleNamespace(snapshot_for_preparation=lambda *a: object(), selected=lambda *a: True),
+        stage_work_store=SimpleNamespace(find_stage_work=lambda work: record), _scheduling_waits=SchedulingWaits(),
+        _ready_preparations=SimpleNamespace(context_resume_step=lambda key: "snapshot", request_queued_ns=lambda *a: None),
+        continuation_context=lambda *a: ctx, _attempt_cancel_requested=lambda *a: False,
+    )
+    monkeypatch.setattr(progress, "_advance_ready_inputs",
+                        lambda owner, record, *a, **kw: advanced.append(record.stage_work_id))
+    for still_eligible in (True, False):
+        admissions.invalidate(row.admission_id)
+        with pytest.raises(RunObservationPending):
+            progress.reconcile_admission(owner, row, prepared_context=ctx, dispatch_work_id="work")
+        if not still_eligible:
+            eligible.clear()  # Terminal or in retry backoff when the owner looks again.
+        progress.resume_ready_inputs(owner, owner._ready_continuations.take(), admissions, ("c", "s"))
+    assert advanced == ["work"]
+
+def test_context_return_after_request_completion_continues_descriptor_preparation(monkeypatch):
+    import pytest
+    from loom.queue import _coordinator_run_progress as progress
+    from loom.queue._admission_scan import SchedulingAdmissions
+    from loom.queue._completion_inbox import CompletionInbox
+    from loom.queue._ready_preparation import ReadyPreparationPool
+    from loom.queue._run_observations import RunObservationPending
+    from loom.queue._scheduling_waits import SchedulingWaits
+
+    row = _row("run")
+    inbox = CompletionInbox[str](lambda: None)
+    completed = Event()
+    def notify(work_id):
+        inbox.offer(work_id)
+        completed.set()
+
+    pool = ReadyPreparationPool(lambda: None, on_ready=notify)
+    work_id = "completed-request"
+    ctx = cast(PreparedAdmissionContext, (object(), object()))
+    record = SimpleNamespace(run_uri=row.run_uri, stage_name="stage", attempt_id="attempt", stage_work_id=work_id,
+                             projection_revision=1, ready_at=1, scheduling_state=SchedulingProjectionState.READY,
+                             admission_id=row.admission_id, execution_requirement=None,
+                             placement=SimpleNamespace(route=SimpleNamespace(kind=ExecutionRouteKind.MANAGED_AGENT)))
+    key = record.run_uri, record.stage_name
+    def pending(*args, **kwargs):
+        raise RunObservationPending()
+
+    descriptor_started = Event()
+    owner: Any = SimpleNamespace(
+        daemon=SimpleNamespace(_epoch="c", _scheduling_epoch="s", _result_verifications=SimpleNamespace(bulk=None)),
+        _cycle_contexts={}, _cycle_context_revisions={}, _cycle_context_epochs={}, _ready_continuations=inbox,
+        run_observations=SimpleNamespace(advance=pending),
+        dispatch_observations=SimpleNamespace(snapshot_for_preparation=lambda *a: None, selected=lambda *a: True,
+                                              transferred=lambda *a: None),
+        stage_work_store=SimpleNamespace(find_stage_work=lambda work: record), _scheduling_waits=SchedulingWaits(),
+        _ready_preparations=pool, config=SimpleNamespace(remote_profiles=(object(),), container_capabilities=()),
+        continuation_context=lambda *a: ctx, _attempt_cancel_requested=lambda *a: False,
+        _prepared_input_descriptors=lambda *a: pool.poll(key, "descriptor", descriptor_started.set,
+                                                          phase="input-descriptors", work_id=work_id),
+    )
+    monkeypatch.setattr(progress, "_profile_satisfies_requirement", lambda *a: True)
+    admissions = SchedulingAdmissions(1, lambda ids: {row.admission_id: row})
+    try:
+        pool.poll(key, "request", object, work_id=work_id)
+        assert completed.wait(5) and inbox.take() == (work_id,)  # The original completion was already consumed.
+        with pytest.raises(RunObservationPending):
+            progress.reconcile_admission(owner, row, prepared_context=ctx, dispatch_work_id=work_id)
+        progress.resume_ready_inputs(owner, inbox.take(), admissions, ("c", "s"))
+        assert descriptor_started.wait(5) and pool.context_resume_step(work_id) == "owned"
+    finally:
         pool.close()

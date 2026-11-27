@@ -41,6 +41,11 @@ class SchedulingAdmissions(dict[str, "LocalDaemonAdmission"]):
         self._checked: set[str] = set()
         self.visited_dispatch: set[tuple[str, ...]] = set()
 
+    def invalidate(self, identity: str) -> None:
+        """The reconciliation owner is changing this row. Its next consumer needs current eligibility."""
+        self.pop(identity, None)
+        self._checked.discard(identity)
+
     def include(self, identities: set[str]) -> None:
         missing = identities.difference(self, self._checked)
         if missing:
