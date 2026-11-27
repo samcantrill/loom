@@ -2283,6 +2283,8 @@ class LocalDaemon:
             other = prepared.get(identity)
             if isinstance(other, PendingContext):
                 other.discard("run_observation_preferred")
+                if other.epochs == observation.epochs and other.admission.revision == observation.admission.revision:
+                    observation.dispatch_work_id = observation.dispatch_work_id or other.dispatch_work_id
             prepared[identity] = observation
         # The physical slot was released by completed(). Let its next owner
         # load concurrently with the scheduler applying the drained results.
@@ -2308,7 +2310,7 @@ class LocalDaemon:
                 self._wake.set()
                 continue
             admission = current
-            schedulable.pop(admission.admission_id, None)
+            schedulable.invalidate(admission.admission_id)
             progress = (admission.revision, self._scheduling_epoch)
             retry = self._admission_retries.get(admission.run_uri)
             if retry is not None and not retry.ready(progress):
@@ -2318,7 +2320,8 @@ class LocalDaemon:
             try:
                 context = preparation.result()
                 execution._cycle_context_epochs[admission.admission_id] = preparation.epochs
-                outcome = execution.reconcile_admission(admission, prepared_context=context)
+                work_id, preparation.dispatch_work_id = preparation.dispatch_work_id, None
+                outcome = execution.reconcile_admission(admission, prepared_context=context, dispatch_work_id=work_id)
             except RunObservationPending:
                 continue
             except QueueConflictError:

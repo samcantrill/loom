@@ -42,6 +42,7 @@ class RunObservation:
     steps: RunSteps
     seen: set[tuple[tuple[str, ...], str, str]] = field(default_factory=set)
     read: Future[Any] | None = None
+    dispatch_work_id: str | None = None
 
     def result(self) -> PreparedAdmissionContext:
         return self.context
@@ -126,7 +127,7 @@ class RunObservations:
 
     def advance(
         self, admission: LocalDaemonAdmission, epochs: Epochs, context: PreparedAdmissionContext,
-        create: Callable[[], RunSteps], bulk: BulkOperations,
+        create: Callable[[], RunSteps], bulk: BulkOperations, *, dispatch_work_id: str | None = None,
     ) -> LocalDaemonExecutionOutcome:
         identity = admission.admission_id
         if not self.owns(admission, epochs):
@@ -135,6 +136,7 @@ class RunObservations:
                 raise RunObservationPending()
             self._current[identity] = RunObservation(admission, epochs, context, create())
         job = self._current[identity]
+        job.dispatch_work_id = job.dispatch_work_id or dispatch_work_id
         self._ready.pop(identity, None)
         if identity in self._waiting:
             raise RunObservationPending()

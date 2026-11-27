@@ -57,6 +57,7 @@ def _dispatch_offering(self, record, phase):
 def reconcile_admission(
     self: LocalDaemonExecution, admission: LocalDaemonAdmission,
     *, prepared_intent: ManagedLocalIntent | None = None, prepared_context: PreparedAdmissionContext | None = None,
+    dispatch_work_id: str | None = None,
 ) -> LocalDaemonExecutionOutcome:
     """Reconcile one run into durable ready work without selecting capacity."""
 
@@ -73,7 +74,7 @@ def reconcile_admission(
     self._cycle_contexts[admission.admission_id] = context
     timing = timing_for(context)
     if timing is not None:
-        timing.handed_off = True
+        timing.installed()
 
     def steps() -> RunSteps:
         if timing is not None:
@@ -108,10 +109,28 @@ def reconcile_admission(
                 timing.advance("admission_activation")
             self.daemon._wake.set()
             raise RunObservationPending()
-        return self.run_observations.advance(
-            admission, (self.daemon._epoch, self.daemon._scheduling_epoch),
-            prepared_context, steps, self.daemon._result_verifications.bulk,
+        epochs = self.daemon._epoch, self.daemon._scheduling_epoch
+
+        def offer_ready(work_id: str) -> None:
+            self._ready_continuations.offer(work_id)
+            if timing is not None:
+                timing.resume_work_id = work_id
+                timing.event("context_resume_offered", stage_work_id=work_id)
+
+        if dispatch_work_id is not None:
+            next_step = self._ready_preparations.context_resume_step(dispatch_work_id)
+            if next_step == "owned":
+                dispatch_work_id = None  # The preparation pool already signals its own completions.
+            elif next_step == "descriptors" or self.dispatch_observations.snapshot_for_preparation(admission, epochs) is not None:
+                offer_ready(dispatch_work_id)
+                dispatch_work_id = None
+        outcome = self.run_observations.advance(
+            admission, epochs, prepared_context, steps, self.daemon._result_verifications.bulk,
+            dispatch_work_id=dispatch_work_id,
         )
+        if dispatch_work_id is not None and admission.admission_id in self._observed_ready:
+            offer_ready(dispatch_work_id)
+        return outcome
     elif self.daemon is None:
         return _drive_run_steps(steps(), scoped_authority, admission.run_uri)
     else:
@@ -442,12 +461,21 @@ def retry_dispatch_context(self: LocalDaemonExecution, epochs) -> None:
         others = tuple(r for r in page if r.stage_work_id != retry.work_id and _dispatch_route_enabled(r, disabled))
         if others:
             with self.config.connect_database(self.config.control_database) as conn:
-                if launchable_page(conn, others):
+                siblings = launchable_page(conn, others)
+                if siblings:
+                    retry.work_id = siblings[0].stage_work_id
                     return True
         retry.sibling_after = after
         return False if after is None else None
 
     daemon._contexts.retry_dispatch(epochs, daemon._lookup_schedulable_admissions, needed, self.prepare_admission_context)
+
+
+def _request_stage_context(self, admission, epochs, record):
+    return self.daemon._contexts.try_submit(
+        admission, epochs, self.prepare_admission_context, dispatch_work_id=record.stage_work_id,
+        observe_demand=lambda kind, timing: self._scheduling_waits.context_demand(record, kind, timing),
+    )
 
 
 def resume_ready_inputs(self, work_ids, admissions, epochs):
@@ -465,20 +493,35 @@ def resume_ready_inputs(self, work_ids, admissions, epochs):
         context = self.continuation_context(admission, epochs)
         if context is None:
             if not self.run_observations.awaiting_read(admission, epochs, self.daemon._result_verifications.bulk):
-                self.daemon._contexts.try_submit(admission, epochs, self.prepare_admission_context, dispatch_work_id=work_id)
+                _request_stage_context(self, admission, epochs, record)
             self._scheduling_waits.prequeue(record, "context_unavailable")
             continue
         if self._attempt_cancel_requested(record.run_uri, record.attempt_id):
             self.dispatch_observations.retire_work(admission.admission_id, work_id)
             continue
+        timing = timing_for(context)
+        self._scheduling_waits.context_visit(record, timing)
+        hinted = timing is not None and timing.resume_work_id == work_id
+        key = record.run_uri, record.stage_name
+        before = self._ready_preparations.request_queued_ns(key, work_id) if hinted else None
+        step = self._ready_preparations.context_resume_step(work_id) if hinted else None
         try:
             selected = self.dispatch_observations.selected(admission.admission_id, work_id)
             _advance_ready_inputs(self, record, admission, context, epochs, anticipated=not selected)
-            if self._ready_preparations.request_queued_ns((record.run_uri, record.stage_name), work_id) is not None:
+            if self._ready_preparations.request_queued_ns(key, work_id) is not None:
                 self.dispatch_observations.transferred(admission, epochs, work_id)
         except Exception:
             # The selected route owns the durable decision about a failed preparation.
             continue
+        finally:
+            if hinted and timing is not None:
+                timing.resume_work_id = None
+                queued = self._ready_preparations.request_queued_ns(key, work_id)
+                outcome = "new_request" if queued is not None and queued != before else (
+                    "existing_request" if queued is not None else "no_request")
+                if step == "descriptors" and self._ready_preparations.context_resume_step(work_id) == "owned":
+                    outcome = "new_descriptors"
+                timing.event("context_resume_examined", stage_work_id=work_id, outcome=outcome)
 
 
 def _schedule_window(
@@ -521,18 +564,18 @@ def _schedule_window(
     if daemon is not None:
         # READY projections outlive an admission sweep. Revalidate their retained
         # intent through the same bounded context loader before allocating work.
-        ready_admissions: dict[str, str] = {}
+        ready_admissions: dict[str, StageWorkRecord] = {}
         for record in window:
             if _dispatch_route_enabled(record, disabled_routes):
-                ready_admissions.setdefault(record.admission_id, record.stage_work_id)
-        for identity, work_id in ready_admissions.items():
+                ready_admissions.setdefault(record.admission_id, record)
+        for identity, record in ready_admissions.items():
             admission = admissions.get(identity)
             if admission is not None and self._cycle_context_revisions.get(identity) != admission.revision:
                 self.discard_dispatch_context(identity, reason="admission_revision_changed")
             if admission is not None and self._cycle_context_epochs.get(identity) != epochs:
                 if self.run_observations.awaiting_read(admission, epochs, daemon._result_verifications.bulk):
                     continue
-                if not daemon._contexts.try_submit(admission, epochs, self.prepare_admission_context, dispatch_work_id=work_id):
+                if not _request_stage_context(self, admission, epochs, record):
                     break
         # A refused load can end this pass before later retained rows are
         # visited. Every context exposed to placement still needs both fences.
@@ -554,6 +597,7 @@ def _schedule_window(
         if admission is None or context is None:
             self._scheduling_waits.prequeue(record, "context_unavailable")
             continue
+        self._scheduling_waits.context_visit(record, timing_for(context))
         limit = context[0].max_parallel_stages
         if limit is not None and admission.run_uri not in active_counts:
             active_counts[admission.run_uri] = self.coordinator.run_active_assignment_count(admission.run_uri)
@@ -591,6 +635,7 @@ def _schedule_window(
     def dispatch_snapshot(
         admission: LocalDaemonAdmission, authority: _ScopedCoordinatorAuthority, record: StageWorkRecord,
     ) -> AuthoritativeRunSnapshot | None:
+        self._scheduling_waits.context_progress(record, timing_for(contexts[record.admission_id]), "selection")
         if self.daemon is None:
             return authority.open_run(admission.run_uri)
         identity = admission.admission_id
