@@ -1331,9 +1331,10 @@ class LocalDaemon:
             require_unretired(self.config.coordinator_root)
             require_storage_upgrade_ready(self.config.coordinator_root, entering=True)
             from .local_daemon_execution import ensure_child_release_indexes
-            from .slurm_ready_stage import ensure_slurm_page_index
+            from .slurm_ready_stage import ensure_slurm_page_index, ensure_slurm_validation_index
             with self.config.connect_database(self.config.execution_database) as execution_conn:
                 ensure_slurm_page_index(execution_conn)
+                ensure_slurm_validation_index(execution_conn, self.config.slurm_schema_version)
                 ensure_child_release_indexes(execution_conn)
             with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")

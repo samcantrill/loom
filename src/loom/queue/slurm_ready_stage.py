@@ -76,6 +76,13 @@ if TYPE_CHECKING:
 SLURM_STAGE_DELIVERY_SCHEMA_VERSION = 5
 _ASSIGNMENT_TABLE = "slurm_stage_assignments"
 _OUTPUT_TABLE = "slurm_stage_outputs"
+_INVALID_ASSIGNMENT_EVIDENCE = (
+    "(state != 'released' AND requested_gpu_count IS NULL) OR requested_gpu_count < 0 "
+    "OR (requested_gpu_count IS NOT NULL AND typeof(requested_gpu_count) != 'integer') "
+    "OR (capability_delivery_kind IS NULL AND capability_expires_at IS NOT NULL) "
+    "OR (capability_delivery_kind IS NOT NULL AND (capability_delivery_kind != 'user_private_file_v1' "
+    "OR capability_expires_at IS NULL))"
+)
 
 
 def _reserved_gpu_count(conn: sqlite3.Connection, schema_version: int = 4) -> int:
@@ -521,6 +528,16 @@ def ensure_slurm_page_index(conn: sqlite3.Connection) -> None:
         "(json_extract(identity_json, '$.agent_id'), json_extract(identity_json, '$.agent_root_id'), assignment_id) "
         "WHERE state != 'released'"
     )
+
+
+def ensure_slurm_validation_index(conn: sqlite3.Connection, schema_version: int) -> None:
+    # Valid histories have no entries. Both validation reads can prove that
+    # without walking the overflow pages containing retained worker deliveries.
+    if schema_version >= 4:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS slurm_invalid_assignment_evidence "
+            f"ON {_ASSIGNMENT_TABLE}(assignment_id) WHERE {_INVALID_ASSIGNMENT_EVIDENCE}"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1930,6 +1947,7 @@ class SQLiteSlurmStageAssignments:
                     "finalized INTEGER NOT NULL, "
                     "PRIMARY KEY (assignment_id, transfer_id))"
                 )
+                ensure_slurm_validation_index(conn, self.schema_version)
                 _require_schema(conn, allow_unversioned=True, expected_version=self.schema_version)
                 conn.execute(f"PRAGMA user_version = {self.schema_version}")
             else:
@@ -2461,6 +2479,7 @@ def _upgrade_released_schema(conn: sqlite3.Connection) -> None:
         "AND capability_expires_at IS NOT NULL))"
     )
     conn.execute("PRAGMA user_version = 4")
+    ensure_slurm_validation_index(conn, 4)
     _require_schema(conn, expected_version=4)
 
 
@@ -2560,12 +2579,7 @@ def _require_schema(
     ):
         raise QueueServiceError("SLURM assignment store schema is unsupported")
     if expected_version >= 4 and conn.execute(
-        f"SELECT 1 FROM {_ASSIGNMENT_TABLE} WHERE "
-        "(state != 'released' AND requested_gpu_count IS NULL) OR requested_gpu_count < 0 "
-        "OR (requested_gpu_count IS NOT NULL AND typeof(requested_gpu_count) != 'integer') "
-        "OR (capability_delivery_kind IS NULL AND capability_expires_at IS NOT NULL) "
-        "OR (capability_delivery_kind IS NOT NULL AND (capability_delivery_kind != 'user_private_file_v1' "
-        "OR capability_expires_at IS NULL)) LIMIT 1"
+        f"SELECT 1 FROM {_ASSIGNMENT_TABLE} WHERE {_INVALID_ASSIGNMENT_EVIDENCE} LIMIT 1"
     ).fetchone():
         raise QueueServiceError("SLURM assignment store has invalid quantity or credential evidence")
 

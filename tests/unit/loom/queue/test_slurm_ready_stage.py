@@ -155,7 +155,7 @@ def test_concurrent_registration_reads_share_one_delivery_validation(tmp_path, m
     assert calls == [encoded]
 
 
-@pytest.mark.parametrize("version", [3, 4, 5, 6])
+@pytest.mark.parametrize("version", [3, 4, 5, 6, 7])
 def test_assignment_and_projection_share_one_version_on_initialize_and_reopen(tmp_path, version):
     from loom._sqlite_policy import SQLitePolicy
     from loom.queue._agent_slurm import SlurmSubmissionProjection
@@ -171,6 +171,8 @@ def test_assignment_and_projection_share_one_version_on_initialize_and_reopen(tm
     with sqlite3.connect(path) as conn:
         assert conn.execute("PRAGMA user_version").fetchone() == (version,)
         assert conn.execute("PRAGMA journal_mode").fetchone() == ("delete",)
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(slurm_stage_assignments)")}
+        assert ("slurm_invalid_assignment_evidence" in indexes) == (version >= 4)
     conn.close()
     other = 4 if version == 3 else 3
     with pytest.raises(QueueServiceError, match="migration"):
@@ -330,6 +332,47 @@ def test_assignment_store_requires_final_schema_identity(tmp_path: Path) -> None
 
     with pytest.raises(QueueServiceError, match="schema is unsupported"):
         store._open_existing()
+
+
+def test_restart_indexes_retained_assignments_and_preserves_evidence_validation(tmp_path, monkeypatch):
+    from loom.queue import LocalDaemon, LocalDaemonConfig
+    from loom.queue._slurm_admission import SlurmAdmissionPolicy
+    from loom.queue.slurm_ready_stage import _require_schema
+    from tests.unit.loom.queue.test_slurm_admission import ReservationFixture
+
+    config = LocalDaemonConfig(
+        coordinator_root=tmp_path / "coordinator", run_store_root=tmp_path / "runs",
+        agent_root=None, resident_worker_launch_profile=None, cpu_capacity=0,
+        slurm_admission=SlurmAdmissionPolicy(None),
+    )
+    LocalDaemon.initialize(config)
+    fixture = ReservationFixture(config.execution_database.parent)
+    assignment, arguments = fixture.candidate("history", 1)
+    fixture.store.reserve(assignment, **arguments)
+    fixture.store.mark_contained_cancelled("history")
+    fixture.store.release("history")
+    with config.connect_database(config.execution_database) as conn:
+        conn.execute("DROP INDEX slurm_invalid_assignment_evidence")
+
+    monkeypatch.setattr(LocalDaemon, "_serve", lambda self: self._stop.wait())
+    daemon = LocalDaemon(config)
+    daemon.start()
+    daemon.stop()
+
+    with config.connect_database(config.execution_database) as conn:
+        statements: list[str] = []
+        conn.set_trace_callback(statements.append)
+        _require_schema(conn, expected_version=config.slurm_schema_version)
+        conn.set_trace_callback(None)
+        check, = (sql for sql in statements if sql.startswith("SELECT 1 FROM slurm_stage_assignments WHERE"))
+        plan = conn.execute("EXPLAIN QUERY PLAN " + check).fetchall()
+        assert any("USING INDEX slurm_invalid_assignment_evidence" in row[3] for row in plan)
+        # A malformed retained credential still blocks the next evidence transaction.
+        conn.execute("PRAGMA ignore_check_constraints=ON")
+        conn.execute("UPDATE slurm_stage_assignments SET capability_expires_at='orphan' WHERE assignment_id='history'")
+    with pytest.raises(QueueServiceError, match="invalid quantity or credential evidence"):
+        fixture.store.accept_agent_evidence("history", 1, {"sequence": 1})
+    assert fixture.store.agent_evidence("history") == (0, None)
 
 
 _RETIRED_ASSIGNMENT_COLUMNS = (
