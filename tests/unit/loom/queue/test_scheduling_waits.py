@@ -10,9 +10,9 @@ from loom.pipeline.orchestration import StageWorkRecord
 pytestmark = pytest.mark.unit
 
 
-def _record(work, revision=1):
+def _record(work, revision=1, *, ready_at=1):
     return cast(StageWorkRecord, SimpleNamespace(run_uri="file:///run", stage_name=work, stage_work_id=work,
-                admission_id="admission", attempt_id=work + "-attempt", ready_at=1,
+                admission_id="admission", attempt_id=work + "-attempt", ready_at=ready_at,
                 projection_revision=revision))
 
 
@@ -153,13 +153,53 @@ def test_unobserved_endpoints_do_not_report_zero_latency(monkeypatch):
 
 def test_oldest_ready_stage_and_reason_counts_survive_mixed_admission_waits():
     owner = waits.SchedulingWaits()
-    a, b, c = (_record(name) for name in "abc")
-    for item, stamp, reason in ((a, 4, "snapshot_unavailable"), (b, 2, "input_descriptors"),
-                                (c, 5, "snapshot_unavailable")):
-        item.ready_at = stamp
+    a, b, c = (_record(name, ready_at=stamp) for name, stamp in zip("abc", (4, 2, 5)))
+    for item, reason in ((a, "snapshot_unavailable"), (b, "input_descriptors"), (c, "snapshot_unavailable")):
         owner.ready(item)
         owner.prequeue(item, reason)
     assert owner.waiting_reasons({"admission"}) == {
         "admission": "b: inspecting worker inputs (2 awaiting authority snapshot, 1 inspecting worker inputs)"
     }
     assert owner.waiting_reasons({"other"}) == {}
+
+
+def test_stage_context_tracks_first_interest_use_and_progress_per_ready_cycle(monkeypatch):
+    from loom.queue._context_timing import ContextTiming
+    from tests.unit.loom.queue.test_dispatch_context_retries import _row
+
+    now = [10]
+    monkeypatch.setattr(waits, "monotonic_ns", lambda: now[0])
+    monkeypatch.setattr(waits, "milestone", lambda *args, **kwargs: None)
+    owner, record = waits.SchedulingWaits(), _record("stage")
+    load = ContextTiming(_row(record.admission_id), ("owner", "policy"), "dispatch")
+    owner.ready(record)
+    now[0] = 20
+    owner.ready(record, scanned=True)
+    now[0] = 30
+    owner.context_demand(record, "requested", load)
+    now[0] = 35
+    owner.context_demand(record, "joined_pending", load)
+    load.installed_ns = 40
+    now[0] = 50
+    owner.context_visit(record, load)
+    owner.context_progress(record, load, "request_queued", 25)
+    owner.context_progress(record, load, "request_queued", 55)
+    owner.reserved(record, "old", None, None)
+    now[0] = 60
+    reopened = _record("stage", 3)
+    owner.ready(reopened, scanned=True)
+    owner.context_demand(record, "requested", load)
+    owner.context_visit(reopened, load)
+    replacement = ContextTiming(_row(record.admission_id), ("owner", "policy"), "discovery")
+    owner.context_demand(reopened, "joined_pending", replacement)
+    owner.context_visit(reopened, load)  # The reused context cannot satisfy the new demand.
+    owner.context_progress(reopened, load, "request_queued", 55)
+    owner.context_progress(reopened, load, "selection")
+    owner.reserved(reopened, "new", None, None)
+    first, second = [r["stage_context"] for r in cast(list[dict], owner.summaries(record.run_uri))]
+    assert [first[k] for k in ("first_scan_ns", "interest_ns", "installed_ns", "visit_ns", "progress_ns")] == [20, 30, 40, 50, 55]
+    assert first["interest_kind"] == "requested" and first["progress_kind"] == "request_queued"
+    assert first["demand_load"] == first["used_load"] == first["progress_load"] == load.identity()
+    assert second["interest_kind"] == "reused" and second["progress_kind"] == "selection"
+    assert second["progress_ns"] == 60 and second["demand_load"] == replacement.identity()
+    assert "demand_installed_ns" not in second and first["demand_installed_ns"] == 40

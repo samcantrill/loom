@@ -176,6 +176,16 @@ higher priority can displace the newest waiter of lowest priority. Work beyond
 the bound remains discoverable in the ordinary READY scan. Restart reconstructs
 demand from that same durable projection.
 
+One READY work ID follows a dispatch request through loading, including a load
+already started by discovery. A retry whose original stage retired can carry
+the ID of a currently eligible sibling. Once reconciliation installs the checked
+context and a snapshot is available, the coordinator offers the work ID to the
+existing READY continuation inbox. A pending run observation can carry that
+interest until its read completes. The request preparation pool signals work it
+already owns. The consumer checks the current READY attempt, admission and
+cancellation before advancing inputs. Placement and reservation still use the
+global selector and its current offers.
+
 For placement qualification, start the coordinator with
 `LOOM_QUALIFICATION_TIMINGS=all` and pass its stderr to the offline report.
 
@@ -232,6 +242,28 @@ entry. A reused request can predate a reopened projection. In that case
 null. The placement wait still starts when those request bytes became
 available. Wait-reason seconds describe the observed scheduling cycle. The
 confirmed eligible time measures only overlap with the completed request.
+
+The attempt's `stage_context` contains coordinator monotonic timestamps and
+the first placement scan. Its first context interest may request a load, join a
+pending load or waiter, or use an already installed context. A later first
+loader demand is retained even when the stage initially reused context.
+The demand, first usable visit and first observed progress each identify their
+own load when qualification timing is enabled. The process clock domain,
+admission ID, revision, epochs and request ID identify a load across log files.
+The install-to-progress interval ends at the first observed request enqueue or
+placement selection for this attempt, using the context for that transition.
+A context installed before this READY cycle, a superseded demand or a missing
+endpoint can leave an interval null. These phases can overlap.
+
+The `context_loader.targeted_resumes` counts offers and examined outcomes.
+`new_request` indicates that this revisit queued a request, `existing_request`
+means a request already existed at the revisit, and `no_request` means none
+was queued. A coalesced or obsolete hint can have no observed examination.
+`target_admission_to_first_stage_entry` gives one sample per observed target
+admission with a linked guest entry, even when it has several stages. For a
+capture containing a single suite, `first_target_admission_to_last_first_entry`
+measures how long it took for all observed targets to begin. It is null when
+any observed target admission lacks either endpoint.
 
 The handoff connects the specific preparation child's return to the committed
 prepared-target receipt and target admission. A lost diagnostic, older guest,

@@ -101,6 +101,10 @@ class ReadyPreparationPool:
         busy = sum(not phase.future.done() for stage in self._pending.values() for phase in stage.phases.values())
         return "preparation_capacity" if busy >= self._max_workers else None
 
+    def owns_request(self, work_id: str) -> bool:
+        return any(stage.work_id == work_id and not stage.retiring and "request" in stage.phases
+                   for stage in self._pending.values())
+
     def request_queued_ns(self, key: tuple[str, str], work_id: str) -> int | None:
         """Return the actual queue stamp of the retained request for this exact work."""
         stage = self._pending.get(key)

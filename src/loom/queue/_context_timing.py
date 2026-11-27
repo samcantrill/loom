@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from itertools import count
+from time import monotonic_ns
 from typing import TYPE_CHECKING
 
 from loom.serialization import PlainData
@@ -22,7 +23,8 @@ class ContextTiming:
     epochs: tuple[str | None, str | None]
     source: str
     request_id: int = field(default_factory=lambda: next(_request_ids))
-    handed_off: bool = False
+    installed_ns: int | None = None
+    resume_work_id: str | None = None
     advanced: bool = False
     discarded: bool = False
 
@@ -33,6 +35,14 @@ class ContextTiming:
             coordinator_epoch=self.epochs[0], scheduling_epoch=self.epochs[1],
             context_request_id=self.request_id, source=self.source, details=details,
         )
+
+    def installed(self) -> None:
+        if self.installed_ns is None:
+            self.installed_ns = monotonic_ns()
+
+    def identity(self) -> dict[str, PlainData]:
+        return {"context_request_id": self.request_id, "admission_revision": self.admission.revision,
+                "coordinator_epoch": self.epochs[0], "scheduling_epoch": self.epochs[1]}
 
     def advance(self, consumer: str) -> None:
         # First use and retirement are owned by the scheduling thread.

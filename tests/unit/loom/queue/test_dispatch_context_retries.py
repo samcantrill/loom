@@ -221,6 +221,83 @@ def test_shared_producer_keeps_admission_order_when_previous_witness_loses_deman
         retry_dispatch_context(owner, epochs)
         pool._pending[original.admission_id].future.result(timeout=10)
         assert started == ["held", original.admission_id]
+        assert pool._pending[original.admission_id].dispatch_work_id == work_id("z")
     finally:
         gate.set()
         pool.close()
+
+
+def test_discovery_inherits_one_dispatch_witness_without_consuming_dispatch_slot():
+    epochs = "owner", "policy"
+    pool = ContextPreparations(lambda: None)
+    gate = Event()
+    demand = []
+
+    def load(row, epochs):
+        assert gate.wait(5)
+        return cast(PreparedAdmissionContext, (object(), object()))
+
+    def observe(kind, timing):
+        demand.append(kind)
+
+    try:
+        assert pool.try_submit(_row("occupied"), epochs, load, dispatch_work_id="other")
+        assert not pool.try_submit(_row("run"), epochs, load, dispatch_work_id="stage-a", observe_demand=observe)
+        assert not pool.try_submit(_row("run"), epochs, load, dispatch_work_id="stage-b", observe_demand=observe)
+        assert pool.try_submit(_row("run"), epochs, load)  # Discovery services the refused demand.
+        assert pool.try_submit(_row("run"), epochs, load, dispatch_work_id="stage-c", observe_demand=observe)
+        item = pool._pending["run"]
+        assert not item.for_dispatch and item.dispatch_work_id == "stage-b"
+        assert demand == ["requested", "joined_waiter", "joined_pending"]
+        gate.set()
+        for item in pool._pending.values():
+            item.future.result(5)
+        pool.completed()
+        assert pool.try_submit(_row("another"), epochs, load)
+        assert pool.try_submit(_row("another"), epochs, load, dispatch_work_id="joined-first")
+        assert pool._pending["another"].dispatch_work_id == "joined-first"
+    finally:
+        gate.set()
+        pool.close()
+
+
+def test_installed_context_hints_exact_stage_even_when_run_observation_yields():
+    import pytest
+    from loom.queue._completion_inbox import CompletionInbox
+    from loom.queue._coordinator_run_progress import reconcile_admission
+    from loom.queue._run_observations import RunObservationPending
+
+    inbox = CompletionInbox[str](lambda: None)
+    row = _row("current")
+    ctx = cast(PreparedAdmissionContext, (object(), object()))
+
+    def awaiting_read(*args, dispatch_work_id):
+        retained.append(dispatch_work_id)
+        assert owner._cycle_contexts[row.admission_id] == ctx
+        raise RunObservationPending()
+
+    retained = []
+    observations = SimpleNamespace(snapshot_for_preparation=lambda *args: object())
+    owner: Any = SimpleNamespace(
+        daemon=SimpleNamespace(_epoch="coordinator", _scheduling_epoch="policy", _result_verifications=SimpleNamespace(bulk=None)),
+        _cycle_contexts={}, _cycle_context_epochs={}, _cycle_context_revisions={}, _ready_continuations=inbox,
+        run_observations=SimpleNamespace(advance=awaiting_read), dispatch_observations=observations,
+        _ready_preparations=SimpleNamespace(owns_request=lambda key: False),
+    )
+    with pytest.raises(RunObservationPending):
+        reconcile_admission(owner, row, prepared_context=ctx, dispatch_work_id="exact-stage")
+    assert inbox.take() == ("exact-stage",)
+    with pytest.raises(RunObservationPending):
+        reconcile_admission(owner, row, prepared_context=ctx)
+    assert not inbox.take()
+    observations.snapshot_for_preparation = lambda *args: None
+    with pytest.raises(RunObservationPending):
+        reconcile_admission(owner, row, prepared_context=ctx, dispatch_work_id="awaiting-snapshot")
+    assert not inbox.take() and retained[-1] == "awaiting-snapshot"
+    owner.run_observations.advance = lambda *a, **kw: object()
+    owner._observed_ready = {row.admission_id: object()}
+    reconcile_admission(owner, row, prepared_context=ctx, dispatch_work_id=retained[-1])
+    assert inbox.take() == ("awaiting-snapshot",)
+    owner._ready_preparations.owns_request = lambda key: True
+    reconcile_admission(owner, row, prepared_context=ctx, dispatch_work_id="already-queued")
+    assert not inbox.take()

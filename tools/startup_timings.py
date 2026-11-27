@@ -27,6 +27,8 @@ _PHASES = {
     "agent_to_supervisor": ("assignment_received", "supervisor_launch"),
     "supervisor_to_stage_run": ("supervisor_launch", "stage_run_entered"),
 }
+_STAGE_CONTEXT_PHASES = ("ready_to_first_scan", "first_scan_to_context_interest", "context_demand_to_install",
+                         "context_install_to_stage_visit", "context_install_to_stage_progress")
 _HANDOFF = {
     "child_return_to_prepared_target_commit": ("stage_run_returned", "prepared_target_committed"),
     "child_return_to_admission_succeeded": ("stage_run_returned", "admission_succeeded"),
@@ -41,7 +43,7 @@ _CONTEXT_PHASES = {
     "available_to_first_consumer": ("context_available", "context_consumer_advanced"),
 }
 _CONTEXT_ACTIONS = {action for pair in _CONTEXT_PHASES.values() for action in pair} | {
-    "context_validation", "context_discarded", "context_cache_evicted",
+    "context_validation", "context_discarded", "context_cache_evicted", "context_resume_offered", "context_resume_examined",
 }
 _CONTEXT_ID = ("admission_id", "admission_revision", "coordinator_epoch", "scheduling_epoch", "context_request_id")
 _BULK_PHASES = {"preparation_report_hydration", "preparation_target_publication", "preparation_annotation_initialization"}
@@ -223,6 +225,24 @@ def _request(events, reserved, single_cycle):
     return result
 
 
+def _stage_context_intervals(summary):
+    fields = summary.get("stage_context", {})
+    ready = summary.get("prequeue_ready_ns")
+    scan, interest = fields.get("first_scan_ns"), fields.get("interest_ns")
+    install = fields.get("installed_ns")
+    def interval(start, end):
+        if start is None or end is None or ready is None or not ready <= start <= end:
+            return None
+        return {"seconds": (end - start) / 1e9, "clock": "monotonic", "uncertainty_seconds": 0}
+    return {
+        "ready_to_first_scan": interval(ready, scan),
+        "first_scan_to_context_interest": interval(scan, interest),
+        "context_demand_to_install": interval(fields.get("demand_ns"), fields.get("demand_installed_ns")),
+        "context_install_to_stage_visit": interval(install, fields.get("visit_ns")),
+        "context_install_to_stage_progress": interval(fields.get("progress_installed_ns"), fields.get("progress_ns")),
+    }
+
+
 def _attempt(trace, key, assignment, assigned, ready, single_cycle, error_ms):
     admission, work_id, attempt = key
     reserved = _first(assigned.get("reservation_committed", ()))
@@ -243,6 +263,7 @@ def _attempt(trace, key, assignment, assigned, ready, single_cycle, error_ms):
         intervals["request_worker_queue"] = None
         intervals["request_worker_io"] = None
     s = summary.attrs if summary else {}
+    intervals.update(_stage_context_intervals(s))
     r = reserved.attrs if reserved else {}
     waits = s.get("wait_ns")
     prequeue = s.get("prequeue_status", "missing")
@@ -263,6 +284,8 @@ def _attempt(trace, key, assignment, assigned, ready, single_cycle, error_ms):
                                       r.get("ready_projection_revision", s.get("ready_projection_revision"))),
         "projection_revision": r.get("projection_revision", s.get("projection_revision")),
         "intervals": intervals, "request_queued_before_this_ready": carried,
+        "stage_context": ({"clock_domain": list(summary.domain), **s["stage_context"]}
+                          if summary and "stage_context" in s else None),
         "prequeue_status": prequeue,
         "prequeue_wait_seconds": {k: v / 1e9 for k, v in prequeue_waits.items()} if prequeue_waits is not None else None,
         "wait_reason_seconds": {k: v / 1e9 for k, v in waits.items()} if waits is not None else None,
@@ -391,8 +414,13 @@ def _context_report(trace, operation):
     selected_revisions = set()
     waits, validations, evictions = Counter(), Counter(), Counter()
     discard_reasons = defaultdict(Counter)
+    resumes = Counter()
     best = {}
     for key, actions in trace.contexts.items():
+        for action in ("context_resume_offered", "context_resume_examined"):
+            # Logs can be replayed or supplied more than once.
+            for obs in {e.ns: e for e in actions.get(action, ()) if e.ns is not None}.values():
+                resumes[obs.attrs.get("outcome", "offered")] += 1
         row = _context_load(key, actions)
         admission, revision = row["admission_id"], row["admission_revision"]
         counts = revisions[admission, revision]
@@ -430,7 +458,7 @@ def _context_report(trace, operation):
         row["slowest_for"].append(name)
     report = {
         "observed_requests": len(trace.contexts), "admission_revisions": len(revisions),
-        "unattributed_events": trace.unattributed_context_events,
+        "unattributed_events": trace.unattributed_context_events, "targeted_resumes": dict(resumes),
         "repeated_requests": sum(counts["requests"] - 1 for counts in revisions.values()),
         "observed_reloads": sum(max(0, counts["loader_starts"] - 1) for counts in revisions.values()),
         "requests_per_revision": dict(sorted(Counter(v["requests"] for v in revisions.values()).items())),
@@ -470,6 +498,7 @@ def summarize(records, *, clock_error_ms=None, slowest=10, operation=None):
     operations = list(dict.fromkeys([*trace.client, *(op for op, _ in trace.admissions.values()), *trace.prepared, *trace.bulk]))
     durations, send_times, reports = [], [], []
     handoff_samples = []
+    target_start_intervals, first_entries, target_commits = [], [], []
     phase_samples = defaultdict(list)
     prequeue_samples = defaultdict(list)
     prequeue_counts = defaultdict(Counter)
@@ -488,6 +517,15 @@ def summarize(records, *, clock_error_ms=None, slowest=10, operation=None):
         roles = grouped[op]
         entry = _first(e for a in roles["target"] for e in
                        trace.assignments.get(a["assignment_id"], {}).get("stage_run_entered", ()))
+        for admission_id in targets[op]:
+            admitted = trace.admitted.get(admission_id)
+            first_entry = _first(e for a in roles["target"] if a["admission_id"] == admission_id
+                                 for e in trace.assignments.get(a["assignment_id"], {}).get("stage_run_entered", ()))
+            target_start_intervals.append(_interval(admitted, first_entry, clock_error_ms))
+            if admitted:
+                target_commits.append(admitted)
+            if first_entry:
+                first_entries.append(first_entry)
         latency = _interval(ack, entry, clock_error_ms)
         if latency:
             durations.append(latency)
@@ -522,11 +560,16 @@ def summarize(records, *, clock_error_ms=None, slowest=10, operation=None):
                                 -(_seconds(r["ack_to_first_target_entry"]) or 0), r["operation_id"]))
     cross = sum(i["clock"] == "utc" for i in durations)
     any_cross = any(i["clock"] == "utc" for i in [*send_times, *durations])
+    any_cross |= any(i and i["clock"] == "utc" for i in target_start_intervals)
     for samples in [*phase_samples.values(), handoff_samples]:
         any_cross |= any(i and i["clock"] == "utc" for s in samples for i in s.values())
     return {
         "unit": "seconds", "first_send_to_first_ack": _distribution(i["seconds"] for i in send_times),
         "context_loader": _context_report(trace, operation),
+        "target_admission_to_first_stage_entry": _stats(target_start_intervals),
+        "first_target_admission_to_last_first_entry": (
+            _interval(_first(target_commits), max(first_entries, key=lambda e: e.utc), clock_error_ms)
+            if target_start_intervals and all(target_start_intervals) else None),
         "ack_to_first_target_entry": _distribution(i["seconds"] for i in durations),
         "submissions_without_acknowledgement": ack_missing, "acknowledgements": acked,
         "acknowledgements_without_target_entry": without_target, "preparation_only_acknowledgements": prep_acks,
@@ -534,7 +577,7 @@ def summarize(records, *, clock_error_ms=None, slowest=10, operation=None):
             0 if not any_cross else None if clock_error_ms is None else 2 * clock_error_ms / 1000),
         "observed_request_ready_and_eligible_to_reservation": {
             role: {**_distribution(eligible[role]), "unknown": unknown[role]} for role in ("preparation", "target")},
-        "phase_distributions": {role: {name: _stats(s.get(name) for s in phase_samples[role]) for name in _PHASES}
+        "phase_distributions": {role: {name: _stats(s.get(name) for s in phase_samples[role]) for name in (*_PHASES, *_STAGE_CONTEXT_PHASES)}
                                 for role in ("preparation", "target")},
         "prequeue_distributions": {
             role: {"coverage": dict(prequeue_counts[role]),

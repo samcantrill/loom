@@ -36,6 +36,7 @@ class PendingContext:
     epochs: tuple[str | None, str | None]
     future: Future[PreparedAdmissionContext]
     for_dispatch: bool
+    dispatch_work_id: str | None = None
     fresh_load: bool = True
     invalidated: bool = False
     timing: ContextTiming | None = None
@@ -177,7 +178,7 @@ class ContextPreparations:
                 if useful:
                     if self._tracing:
                         self._request_timing(admission, epochs, source="dispatch", wait_reason="available", reuse=False)
-                    self._start(admission, epochs, load, for_dispatch=True, continuation=None)
+                    self._start(admission, epochs, load, dispatch_work_id=retry.work_id, continuation=None)
                     return
                 reason = "dispatch_no_longer_needed"
             del self._dispatch_retries[identity]
@@ -192,6 +193,7 @@ class ContextPreparations:
         load: ContextLoader,
         *, dispatch_work_id: str | None = None, resume: bool = False,
         continuation: PreparedAdmissionContext | None = None,
+        observe_demand: Callable[[str, ContextTiming | None], None] | None = None,
     ) -> bool:
         """Submit a load or continuation; a refused READY request retains its retry."""
         identity = admission.admission_id
@@ -199,9 +201,14 @@ class ContextPreparations:
         queued = self._dispatch_retries.get(identity)
         if queued is not None and (queued.epochs != epochs or queued.admission.revision != admission.revision):
             del self._dispatch_retries[identity]
+            queued = None
         pending = self._pending.get(identity)
         if pending is not None and (pending.epochs == epochs and pending.admission.revision == admission.revision
                                     and not pending.invalidated):
+            if dispatch_work_id is not None and pending.dispatch_work_id is None:
+                pending.dispatch_work_id = dispatch_work_id
+            if observe_demand is not None:
+                observe_demand("joined_pending", pending.timing)
             return True
         previous = self._next_load.get(identity)
         if (pending is None and not (for_dispatch or resume) and previous is not None
@@ -217,25 +224,28 @@ class ContextPreparations:
             wait_reason = "dispatch_retry_pending"
         else:
             wait_reason = "available"
+        timing = None
         if self._tracing:
             source = "dispatch" if for_dispatch else ("resume" if resume else "discovery")
-            self._request_timing(admission, epochs, source=source,
-                                 wait_reason=wait_reason, reuse=continuation is not None)
+            timing = self._request_timing(admission, epochs, source=source,
+                                          wait_reason=wait_reason, reuse=continuation is not None)
+        if observe_demand is not None:
+            observe_demand("joined_waiter" if queued is not None else "requested", timing)
         if wait_reason != "available":
             if dispatch_work_id is not None:
                 added = self._remember_dispatch(DispatchContextRetry(admission, epochs, dispatch_work_id))
                 if added and wait_reason == "dispatch_retry_pending":
                     self._wake()  # The new waiter arrived after this turn serviced retries.
             return pending is not None
-        self._start(admission, epochs, load, for_dispatch=for_dispatch, continuation=continuation)
+        self._start(admission, epochs, load, dispatch_work_id=dispatch_work_id, continuation=continuation)
         return True
 
     def _start(
         self, admission: LocalDaemonAdmission, epochs: tuple[str | None, str | None],
-        load: ContextLoader, *, for_dispatch: bool, continuation: PreparedAdmissionContext | None,
+        load: ContextLoader, *, dispatch_work_id: str | None, continuation: PreparedAdmissionContext | None,
     ) -> None:
         identity = admission.admission_id
-        self._dispatch_retries.pop(identity, None)  # Discovery can satisfy the same request.
+        retry = self._dispatch_retries.pop(identity, None)  # Discovery can satisfy the same request.
         timing = self._waiting.pop(identity, None)
         if continuation is None:
             future = self._workers.submit(copy_context().run, _load_context, load, admission, epochs, timing)
@@ -243,7 +253,9 @@ class ContextPreparations:
             future = Future()
             future.set_result(continuation)
         self._pending[identity] = PendingContext(
-            admission, epochs, future, for_dispatch, fresh_load=continuation is None, timing=timing,
+            admission, epochs, future, for_dispatch=dispatch_work_id is not None,
+            dispatch_work_id=dispatch_work_id if retry is None else retry.work_id,
+            fresh_load=continuation is None, timing=timing,
         )
         future.add_done_callback(lambda _future: self._wake())
 
@@ -264,7 +276,7 @@ class ContextPreparations:
         # An exception while checking one admission can interrupt the drained
         # batch before the remaining contexts reach their individual owners.
         for timing in self._drained:
-            if not timing.handed_off:
+            if timing.installed_ns is None:
                 timing.discard("preparation", "handoff_interrupted")
         self._drained.clear()
 
