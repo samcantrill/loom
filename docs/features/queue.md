@@ -181,8 +181,8 @@ already started by discovery. A retry whose original stage retired can carry
 the ID of a currently eligible sibling. Once reconciliation installs the checked
 context and a snapshot is available, the coordinator offers the work ID to the
 existing READY continuation inbox. A pending run observation can carry that
-interest until its read completes. The request preparation pool signals work it
-already owns. The consumer checks the current READY attempt, admission and
+interest until its read completes. A completed request that still needs
+input descriptors can resume directly. Running builds signal their own completion. The consumer checks the current READY attempt, admission and
 cancellation before advancing inputs. Placement and reservation still use the
 global selector and its current offers.
 
@@ -257,8 +257,8 @@ endpoint can leave an interval null. These phases can overlap.
 
 The `context_loader.targeted_resumes` counts offers and examined outcomes.
 `new_request` indicates that this revisit queued a request, `existing_request`
-means a request already existed at the revisit, and `no_request` means none
-was queued. A coalesced or obsolete hint can have no observed examination.
+means a request already existed at the revisit, `new_descriptors` means its
+input descriptor phase began, and `no_request` means none was queued. A coalesced or obsolete hint can have no observed examination.
 `target_admission_to_first_stage_entry` gives one sample per observed target
 admission with a linked guest entry, even when it has several stages. For a
 capture containing a single suite, `first_target_admission_to_last_first_entry`

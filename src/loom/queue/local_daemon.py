@@ -2310,7 +2310,7 @@ class LocalDaemon:
                 self._wake.set()
                 continue
             admission = current
-            schedulable.pop(admission.admission_id, None)
+            schedulable.invalidate(admission.admission_id)
             progress = (admission.revision, self._scheduling_epoch)
             retry = self._admission_retries.get(admission.run_uri)
             if retry is not None and not retry.ready(progress):

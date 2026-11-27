@@ -515,12 +515,14 @@ def summarize(records, *, clock_error_ms=None, slowest=10, operation=None):
         if send_time:
             send_times.append(send_time)
         roles = grouped[op]
-        entry = _first(e for a in roles["target"] for e in
-                       trace.assignments.get(a["assignment_id"], {}).get("stage_run_entered", ()))
+        entries = defaultdict(list)
+        for attempt in roles["target"]:
+            entries[attempt["admission_id"]].extend(
+                trace.assignments.get(attempt["assignment_id"], {}).get("stage_run_entered", ()))
+        entry = _first(e for events in entries.values() for e in events)
         for admission_id in targets[op]:
             admitted = trace.admitted.get(admission_id)
-            first_entry = _first(e for a in roles["target"] if a["admission_id"] == admission_id
-                                 for e in trace.assignments.get(a["assignment_id"], {}).get("stage_run_entered", ()))
+            first_entry = _first(entries[admission_id])
             target_start_intervals.append(_interval(admitted, first_entry, clock_error_ms))
             if admitted:
                 target_commits.append(admitted)

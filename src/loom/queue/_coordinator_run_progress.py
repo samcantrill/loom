@@ -118,9 +118,10 @@ def reconcile_admission(
                 timing.event("context_resume_offered", stage_work_id=work_id)
 
         if dispatch_work_id is not None:
-            if self._ready_preparations.owns_request(dispatch_work_id):
+            next_step = self._ready_preparations.context_resume_step(dispatch_work_id)
+            if next_step == "owned":
                 dispatch_work_id = None  # The preparation pool already signals its own completions.
-            elif self.dispatch_observations.snapshot_for_preparation(admission, epochs) is not None:
+            elif next_step == "descriptors" or self.dispatch_observations.snapshot_for_preparation(admission, epochs) is not None:
                 offer_ready(dispatch_work_id)
                 dispatch_work_id = None
         outcome = self.run_observations.advance(
@@ -503,6 +504,7 @@ def resume_ready_inputs(self, work_ids, admissions, epochs):
         hinted = timing is not None and timing.resume_work_id == work_id
         key = record.run_uri, record.stage_name
         before = self._ready_preparations.request_queued_ns(key, work_id) if hinted else None
+        step = self._ready_preparations.context_resume_step(work_id) if hinted else None
         try:
             selected = self.dispatch_observations.selected(admission.admission_id, work_id)
             _advance_ready_inputs(self, record, admission, context, epochs, anticipated=not selected)
@@ -517,6 +519,8 @@ def resume_ready_inputs(self, work_ids, admissions, epochs):
                 queued = self._ready_preparations.request_queued_ns(key, work_id)
                 outcome = "new_request" if queued is not None and queued != before else (
                     "existing_request" if queued is not None else "no_request")
+                if step == "descriptors" and self._ready_preparations.context_resume_step(work_id) == "owned":
+                    outcome = "new_descriptors"
                 timing.event("context_resume_examined", stage_work_id=work_id, outcome=outcome)
 
 
